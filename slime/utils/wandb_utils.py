@@ -62,7 +62,13 @@ def init_wandb_primary(args):
     if offline:
         init_kwargs["settings"] = wandb.Settings(mode="offline")
     else:
-        init_kwargs["settings"] = wandb.Settings(mode="shared", x_primary=True)
+        # Increase init_timeout to handle network delays in multi-node setups
+        # Default is 90 seconds, increase to 180 seconds for better reliability
+        init_kwargs["settings"] = wandb.Settings(
+            mode="shared",
+            x_primary=True,
+            init_timeout=180,  # Increase timeout for multi-node initialization
+        )
 
     # Add custom directory if specified
     if args.wandb_dir:
@@ -110,10 +116,13 @@ def init_wandb_secondary(args, router_addr=None):
     if offline:
         settings_kwargs = dict(mode="offline")
     else:
+        # Increase init_timeout to handle network delays in multi-node setups
+        # Default is 90 seconds, increase to 180 seconds for better reliability
         settings_kwargs = dict(
             mode="shared",
             x_primary=False,
             x_update_finish_state=False,
+            init_timeout=180,  # Increase timeout for multi-node initialization
         )
 
     if args.sglang_enable_metrics and router_addr is not None:

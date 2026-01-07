@@ -131,10 +131,17 @@ class RolloutManager:
         self.data_source.load(rollout_id)
 
     def offload(self):
-        return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
+        logger.info(f"[RolloutManager] Starting SGLang offload for {len(self.rollout_engines)} engines")
+        results = ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
+        logger.info(f"[RolloutManager] Completed SGLang offload for {len(self.rollout_engines)} engines")
+        return results
 
     def onload(self, tags: list[str] = None):
-        return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
+        tag_str = f" tags={tags}" if tags else ""
+        logger.info(f"[RolloutManager] Starting SGLang onload for {len(self.rollout_engines)} engines{tag_str}")
+        results = ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
+        logger.info(f"[RolloutManager] Completed SGLang onload for {len(self.rollout_engines)} engines{tag_str}")
+        return results
 
     def check_weights(self, action: str):
         return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
@@ -512,12 +519,24 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
 
 def _start_router(args):
     """start sgl router and slime router"""
-    if args.sglang_router_ip is not None:
+    # Only skip starting router if rollout_external is True (external engines)
+    # Otherwise, even if IP and port are set, we should start router
+    if getattr(args, "rollout_external", False):
+        # External rollout engines, don't start router
+        if args.sglang_router_ip is None or args.sglang_router_port is None:
+            raise ValueError("rollout_external requires both sglang_router_ip and sglang_router_port to be set")
         return
-
-    args.sglang_router_ip = _wrap_ipv6(get_host_info()[1])
-    if args.sglang_router_port is None:
-        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
+    
+    # If router IP is already set, check if port needs to be allocated
+    if args.sglang_router_ip is not None:
+        # If port is not set, allocate one
+        if args.sglang_router_port is None:
+            args.sglang_router_port = find_available_port(random.randint(3000, 4000))
+    else:
+        # Auto-detect IP and allocate port
+        args.sglang_router_ip = _wrap_ipv6(get_host_info()[1])
+        if args.sglang_router_port is None:
+            args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
         assert args.prefill_num_servers is None, "slime router does not support prefill_num_servers."

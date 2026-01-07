@@ -1,3 +1,12 @@
+import asyncio
+# 禁用uvloop防止高并发下的socket管理问题导致SIGABRT
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+    print("⚠ uvloop detected in main training script and disabled to prevent SIGABRT crashes")
+except ImportError:
+    pass
+
 import ray
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
@@ -9,6 +18,7 @@ except ImportError:
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger
+from slime.utils.memory_utils import print_memory
 from slime.utils.misc import should_run_periodic_action
 from slime.utils.tracking_utils import init_tracking
 
@@ -47,13 +57,21 @@ def train(args):
     def offload_train():
         if args.offload_train:
             if args.use_critic:
+                print_memory(f"[Rollout {rollout_id}] BEFORE critic_model.offload()")
                 critic_model.offload()
+                print_memory(f"[Rollout {rollout_id}] AFTER critic_model.offload()")
                 if rollout_id >= args.num_critic_only_steps:
+                    print_memory(f"[Rollout {rollout_id}] BEFORE actor_model.offload()")
                     actor_model.offload()
+                    print_memory(f"[Rollout {rollout_id}] AFTER actor_model.offload()")
             else:
+                print_memory(f"[Rollout {rollout_id}] BEFORE actor_model.offload()")
                 actor_model.offload()
+                print_memory(f"[Rollout {rollout_id}] AFTER actor_model.offload()")
         else:
+            print_memory(f"[Rollout {rollout_id}] BEFORE actor_model.clear_memory()")
             actor_model.clear_memory()
+            print_memory(f"[Rollout {rollout_id}] AFTER actor_model.clear_memory()")
 
     def onload_rollout():
         if args.offload_rollout:
@@ -68,7 +86,9 @@ def train(args):
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload_rollout:
+            print_memory(f"[Rollout {rollout_id}] BEFORE SGLang offload")
             ray.get(rollout_manager.offload.remote())
+            print_memory(f"[Rollout {rollout_id}] AFTER SGLang offload")
 
         if args.use_critic:
             critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)
@@ -76,7 +96,9 @@ def train(args):
                 ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
             ray.get(critic_train_handle)
         else:
+            print_memory(f"[Rollout {rollout_id}] BEFORE actor_train (after SGLang offload)")
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
+            print_memory(f"[Rollout {rollout_id}] AFTER actor_train")
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
@@ -86,14 +108,22 @@ def train(args):
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
+        print_memory(f"[Rollout {rollout_id}] BEFORE offload_train")
         offload_train()
+        print_memory(f"[Rollout {rollout_id}] AFTER offload_train")
+        
+        print_memory(f"[Rollout {rollout_id}] BEFORE onload_rollout")
         onload_rollout()
+        print_memory(f"[Rollout {rollout_id}] AFTER onload_rollout (weights)")
+        
         actor_model.update_weights()
 
         if args.offload_rollout:
             if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
+                print_memory(f"[Rollout {rollout_id}] AFTER onload_rollout (CUDA_GRAPH)")
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+            print_memory(f"[Rollout {rollout_id}] AFTER onload_rollout (KV_CACHE)")
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))

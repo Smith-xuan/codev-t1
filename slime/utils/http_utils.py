@@ -253,8 +253,31 @@ async def post(url, payload, max_retries=60):
     return await _post(_http_client, url, payload, max_retries)
 
 
-async def get(url):
-    response = await _http_client.get(url)
-    response.raise_for_status()
-    output = response.json()
-    return output
+async def get(url, max_retries=60):
+    """Get request with retry mechanism to handle transient network errors."""
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            response = await _http_client.get(url)
+            response.raise_for_status()
+            output = response.json()
+            return output
+        except (httpx.ReadError, httpx.ConnectError, httpx.TimeoutException) as e:
+            # Retry on network-related errors (ReadError, ConnectError, TimeoutException)
+            retry_count += 1
+            logger.info(
+                f"Network error in GET request: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url})"
+            )
+            if retry_count >= max_retries:
+                logger.error(f"Max retries ({max_retries}) reached for GET request, failing... (url={url})")
+                raise e
+            await asyncio.sleep(1)
+            continue
+        except httpx.HTTPStatusError as e:
+            # For HTTP status errors (4xx, 5xx), don't retry, just raise
+            logger.error(f"HTTP status error in GET request: {e.response.status_code} (url={url})")
+            raise e
+        except Exception as e:
+            # For other unexpected errors, log and raise
+            logger.error(f"Unexpected error in GET request: {e} (url={url})")
+            raise e

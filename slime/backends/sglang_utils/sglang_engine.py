@@ -308,17 +308,25 @@ class SGLangEngine(RayActor):
         return response.json()["weight_version"]
 
     def release_memory_occupation(self):
+        logger.info(f"[SGLangEngine {self.server_host}:{self.server_port}] BEFORE release_memory_occupation (flushing cache)")
         self.flush_cache()
-        return self._make_request("release_memory_occupation")
+        logger.info(f"[SGLangEngine {self.server_host}:{self.server_port}] AFTER flush_cache, calling release_memory_occupation API")
+        result = self._make_request("release_memory_occupation")
+        logger.info(f"[SGLangEngine {self.server_host}:{self.server_port}] AFTER release_memory_occupation API call")
+        return result
 
     def resume_memory_occupation(self, tags: list[str] = None):
         """
         Available tags for multi-stage resume: weights, kv_cache
         """
-        return self._make_request(
+        tag_str = f" tags={tags}" if tags else " (all tags)"
+        logger.info(f"[SGLangEngine {self.server_host}:{self.server_port}] BEFORE resume_memory_occupation{tag_str}")
+        result = self._make_request(
             "resume_memory_occupation",
             {"tags": tags},
         )
+        logger.info(f"[SGLangEngine {self.server_host}:{self.server_port}] AFTER resume_memory_occupation{tag_str}")
+        return result
 
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})

@@ -130,10 +130,64 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
         payload["input_ids"] = sample.tokens
+        input_token_count = len(sample.tokens)
     else:
         payload["input_ids"] = prompt_ids
+        input_token_count = len(prompt_ids)
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_ids
+
+    # Check input length and handle gracefully if too long
+    # Reserve some margin for special tokens that SGLang might add (e.g., BOS/EOS)
+    # SGLang may reject requests where input + max_new_tokens >= max_context_len
+    SAFETY_MARGIN = 100  # Reserve 100 tokens for special tokens and safety margin
+    max_context_len = getattr(args, 'rollout_max_context_len', None) or 40960
+    max_new_tokens = sampling_params.get("max_new_tokens", 0)
+    
+    # Check if input itself exceeds limit (with safety margin)
+    if input_token_count > max_context_len - SAFETY_MARGIN:
+        logger.warning("="*80)
+        logger.warning("WARNING: Input prompt exceeds maximum context length (with safety margin)!")
+        logger.warning(f"Input token count: {input_token_count}")
+        logger.warning(f"Maximum context length (with margin): {max_context_len - SAFETY_MARGIN}")
+        logger.warning(f"Exceeded by: {input_token_count - (max_context_len - SAFETY_MARGIN)} tokens")
+        logger.warning("="*80)
+        logger.warning("Sample details:")
+        logger.warning(f"  Sample index: {getattr(sample, 'index', 'N/A')}")
+        logger.warning(f"  Sample group_index: {getattr(sample, 'group_index', 'N/A')}")
+        logger.warning(f"  Prompt type: {type(sample.prompt)}")
+        if isinstance(sample.prompt, str):
+            logger.warning(f"  Prompt length (chars): {len(sample.prompt)}")
+        logger.warning("="*80)
+        logger.warning("Full prompt text (COMPLETE, NO TRUNCATION):")
+        logger.warning("="*80)
+        if isinstance(sample.prompt, str):
+            logger.warning(sample.prompt)
+        else:
+            logger.warning(str(sample.prompt))
+        logger.warning("="*80)
+        logger.warning("Sample metadata:")
+        logger.warning(f"  {sample.metadata}")
+        logger.warning("="*80)
+        logger.warning("Prompt too long, marking as TRUNCATED and returning empty response")
+        # Mark as truncated and return early with empty response
+        sample.status = Sample.Status.TRUNCATED
+        sample.response = ""
+        sample.response_length = 0
+        return sample
+    
+    # Check if total length (input + max_new_tokens) would exceed limit (with safety margin)
+    # Use >= instead of > to be more conservative, as SGLang may reject when input + max_new_tokens >= max_context_len
+    if input_token_count + max_new_tokens >= max_context_len - SAFETY_MARGIN:
+        logger.warning(f"Total length ({input_token_count} input + {max_new_tokens} max_new_tokens) would exceed max_context_len ({max_context_len}, with {SAFETY_MARGIN} token safety margin), adjusting max_new_tokens")
+        # Adjust max_new_tokens to fit within context (with safety margin)
+        sampling_params["max_new_tokens"] = max(0, max_context_len - SAFETY_MARGIN - input_token_count)
+        if sampling_params["max_new_tokens"] == 0:
+            logger.warning("No room for new tokens, marking as TRUNCATED and returning empty response")
+            sample.status = Sample.Status.TRUNCATED
+            sample.response = ""
+            sample.response_length = 0
+            return sample
 
     output = await post(url, payload)
 
@@ -291,15 +345,35 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     assert not state.aborted
     state.aborted = True
 
-    if parse(sglang_router.__version__) <= parse("0.2.1") or args.use_slime_router:
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
-        urls = response["urls"]
-    else:
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
-        urls = [worker["url"] for worker in response["workers"]]
-
-    logger.info(f"Abort request for {urls}")
-    await asyncio.gather(*[post(f"{url}/abort_request", {"abort_all": True}) for url in urls])
+    # Try to get worker URLs and send abort requests
+    # If this fails (e.g., router is temporarily unavailable), we'll still process pending tasks
+    urls = []
+    try:
+        if parse(sglang_router.__version__) <= parse("0.2.1") or args.use_slime_router:
+            response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
+            urls = response["urls"]
+        else:
+            response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+            urls = [worker["url"] for worker in response["workers"]]
+        
+        if urls:
+            logger.info(f"Abort request for {urls}")
+            # Use asyncio.gather with return_exceptions=True to handle individual failures gracefully
+            results = await asyncio.gather(
+                *[post(f"{url}/abort_request", {"abort_all": True}) for url in urls],
+                return_exceptions=True
+            )
+            # Log any failures but don't raise
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.warning(f"Failed to send abort request to {urls[i]}: {result}")
+        else:
+            logger.warning("No worker URLs found, skipping abort requests")
+    except Exception as e:
+        logger.warning(
+            f"Failed to get worker list or send abort requests (router may be unavailable): {e}. "
+            f"Continuing to process pending tasks..."
+        )
 
     # make sure all the pending tasks are finished
     count = 0

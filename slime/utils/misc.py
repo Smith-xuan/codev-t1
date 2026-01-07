@@ -53,9 +53,44 @@ def exec_command(cmd: str, capture_output: bool = False) -> str | None:
 
 
 def get_current_node_ip():
+    # First try to get IP from Ray (most reliable in multi-node setup)
     address = ray._private.services.get_node_ip_address()
-    # strip ipv6 address
     address = address.strip("[]")
+    
+    # If Ray returns localhost/127.x.x.x, try alternative methods
+    if address.startswith("127.") or address == "localhost" or address == "::1":
+        import os
+        import socket
+        # Try SLIME_HOST_IP environment variable
+        if env_host_ip := os.getenv("SLIME_HOST_IP", None):
+            return env_host_ip.strip("[]")
+        # Try to get actual network IP
+        try:
+            # Connect to external address to determine local IP
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                actual_ip = s.getsockname()[0]
+                if actual_ip and not actual_ip.startswith("127."):
+                    return actual_ip
+        except Exception:
+            pass
+        # Fallback: try hostname -I
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["hostname", "-I"],
+                capture_output=True,
+                text=True,
+                timeout=2
+            )
+            if result.returncode == 0:
+                ips = result.stdout.strip().split()
+                for ip in ips:
+                    if ip and not ip.startswith("127."):
+                        return ip.split()[0]  # Take first non-localhost IP
+        except Exception:
+            pass
+    
     return address
 
 

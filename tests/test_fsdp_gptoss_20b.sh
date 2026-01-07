@@ -55,7 +55,7 @@ CKPT_ARGS=(
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data /nfs_global/projects/verl/data/eurus2_tir/train.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template

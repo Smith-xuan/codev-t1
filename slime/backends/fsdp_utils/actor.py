@@ -306,13 +306,12 @@ class FSDPTrainRayActor(TrainRayActor):
         if not self.args.offload_train:
             return
 
-        print_memory("before offload model")
-
+        print_memory("BEFORE sleep/offload (FSDP model on GPU)")
         self.model.cpu()
         move_torch_optimizer(self.optimizer, "cpu")
         clear_memory()
         dist.barrier(group=get_gloo_group())
-        print_memory("after offload model")
+        print_memory("AFTER sleep/offload (FSDP model moved to CPU)")
 
     @timer
     def wake_up(self) -> None:
@@ -320,10 +319,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if not self.args.offload_train:
             return
 
+        print_memory("BEFORE wake_up (FSDP model on CPU)")
         self.model.cuda()
         move_torch_optimizer(self.optimizer, "cuda")
         dist.barrier(group=get_gloo_group())
-        print_memory("after wake_up model")
+        print_memory("AFTER wake_up (FSDP model moved to GPU)")
 
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         """Delegate checkpoint saving to the shared checkpoint utilities."""
@@ -488,7 +488,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 by `process_rollout_data` based on data-parallel rank/size.
         """
         if self.args.offload_train:
+            logger.info(f"[FSDP Actor Rank {dist.get_rank()}] Rollout {rollout_id}: Calling wake_up()")
             self.wake_up()
+            logger.info(f"[FSDP Actor Rank {dist.get_rank()}] Rollout {rollout_id}: Completed wake_up()")
 
         with inverse_timer("train_wait"), timer("train"):
             rollout_data = process_rollout_data(self.args, rollout_data_ref, self.dp_rank, self.dp_size)
@@ -555,9 +557,17 @@ class FSDPTrainRayActor(TrainRayActor):
         ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
 
         if self.ref_model is not None:
+            print_memory(f"[Train {rollout_id}] BEFORE _compute_log_prob (ref)")
             self._compute_log_prob("ref", packed_batches, store_prefix="ref_")
+            print_memory(f"[Train {rollout_id}] AFTER _compute_log_prob (ref)")
 
+        print_memory(f"[Train {rollout_id}] BEFORE _compute_log_prob (actor)")
         self._compute_log_prob("actor", packed_batches)
+        print_memory(f"[Train {rollout_id}] AFTER _compute_log_prob (actor)")
+        
+        print_memory(f"[Train {rollout_id}] BEFORE clear_memory (after _compute_log_prob)")
+        clear_memory()
+        print_memory(f"[Train {rollout_id}] AFTER clear_memory (after _compute_log_prob)")
         self._log_rollout_data(rollout_id, rollout_data, packed_batches)
 
         with timer("actor_train"):

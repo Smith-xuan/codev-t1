@@ -1,0 +1,189 @@
+#! /usr/bin/vvp
+:ivl_version "11.0 (stable)";
+:ivl_delay_selection "TYPICAL";
+:vpi_time_precision + 0;
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/system.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/vhdl_sys.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/vhdl_textio.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/v2005_math.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/va_math.vpi";
+:vpi_module "/usr/lib/x86_64-linux-gnu/ivl/v2009.vpi";
+S_0x55b457614570 .scope package, "$unit" "$unit" 2 1;
+ .timescale 0 0;
+S_0x55b457614700 .scope module, "testbench" "testbench" 3 10;
+ .timescale 0 0;
+v0x55b457634ae0_0 .var/i "innerLoopNum", 31 0;
+v0x55b457634be0_0 .var/real "num_all", 0 0;
+v0x55b457634ca0_0 .var/real "num_errors", 0 0;
+v0x55b457634d40_0 .var/i "outerLoopNum", 31 0;
+v0x55b457634e20_0 .net "q_gate", 0 0, L_0x55b4576357f0;  1 drivers
+v0x55b457634f30_0 .net "q_gold", 0 0, L_0x55b4576354f0;  1 drivers
+v0x55b457635000_0 .net "qn_gate", 0 0, L_0x55b457635a40;  1 drivers
+v0x55b4576350d0_0 .net "qn_gold", 0 0, L_0x55b457635640;  1 drivers
+v0x55b4576351a0_0 .var "r_in", 0 0;
+v0x55b457635240_0 .var "s_in", 0 0;
+v0x55b457635350_0 .var/i "seed", 31 0;
+v0x55b457635430_0 .var "trigger", 0 0;
+E_0x55b4575eee40 .event edge, v0x55b4576346e0_0, v0x55b4576340c0_0, v0x55b457634620_0, v0x55b457634020_0;
+S_0x55b457614890 .scope task, "count_errors" "count_errors" 3 55, 3 55 0, S_0x55b457614700;
+ .timescale 0 0;
+TD_testbench.count_errors ;
+    %load/vec4 v0x55b457635430_0;
+    %cmpi/e 1, 0, 1;
+    %jmp/0xz  T_0.0, 6;
+    %load/real v0x55b457634ca0_0;
+    %pushi/vec4 1, 0, 32;
+    %cvt/rv/s;
+    %add/wr;
+    %store/real v0x55b457634ca0_0;
+T_0.0 ;
+    %load/real v0x55b457634be0_0;
+    %pushi/vec4 1, 0, 32;
+    %cvt/rv/s;
+    %add/wr;
+    %store/real v0x55b457634be0_0;
+    %end;
+S_0x55b457615ad0 .scope module, "gate" "rs_latch_gate" 3 31, 4 1 0, S_0x55b457614700;
+ .timescale 0 0;
+    .port_info 0 /INPUT 1 "s";
+    .port_info 1 /INPUT 1 "r";
+    .port_info 2 /OUTPUT 1 "q";
+    .port_info 3 /OUTPUT 1 "qn";
+L_0x55b4576356d0 .functor AND 1, v0x55b457635240_0, L_0x55b457635a40, C4<1>, C4<1>;
+L_0x55b4576357f0 .functor NOT 1, L_0x55b4576356d0, C4<0>, C4<0>, C4<0>;
+L_0x55b457635920 .functor AND 1, v0x55b4576351a0_0, L_0x55b4576357f0, C4<1>, C4<1>;
+L_0x55b457635a40 .functor NOT 1, L_0x55b457635920, C4<0>, C4<0>, C4<0>;
+v0x55b457615d20_0 .net *"_ivl_0", 0 0, L_0x55b4576356d0;  1 drivers
+v0x55b457633f40_0 .net *"_ivl_4", 0 0, L_0x55b457635920;  1 drivers
+v0x55b457634020_0 .net "q", 0 0, L_0x55b4576357f0;  alias, 1 drivers
+v0x55b4576340c0_0 .net "qn", 0 0, L_0x55b457635a40;  alias, 1 drivers
+v0x55b457634180_0 .net "r", 0 0, v0x55b4576351a0_0;  1 drivers
+v0x55b457634290_0 .net "s", 0 0, v0x55b457635240_0;  1 drivers
+S_0x55b4576343d0 .scope module, "gold" "rs_latch_gold" 3 25, 3 2 0, S_0x55b457614700;
+ .timescale 0 0;
+    .port_info 0 /INPUT 1 "s";
+    .port_info 1 /INPUT 1 "r";
+    .port_info 2 /OUTPUT 1 "q";
+    .port_info 3 /OUTPUT 1 "qn";
+L_0x55b4576354f0 .functor NAND 1, v0x55b457635240_0, L_0x55b457635640, C4<1>, C4<1>;
+L_0x55b457635640 .functor NAND 1, v0x55b4576351a0_0, L_0x55b4576354f0, C4<1>, C4<1>;
+v0x55b457634620_0 .net "q", 0 0, L_0x55b4576354f0;  alias, 1 drivers
+v0x55b4576346e0_0 .net "qn", 0 0, L_0x55b457635640;  alias, 1 drivers
+v0x55b4576347a0_0 .net "r", 0 0, v0x55b4576351a0_0;  alias, 1 drivers
+v0x55b457634840_0 .net "s", 0 0, v0x55b457635240_0;  alias, 1 drivers
+S_0x55b457634900 .scope task, "randomize_inputs" "randomize_inputs" 3 46, 3 46 0, S_0x55b457614700;
+ .timescale 0 0;
+TD_testbench.randomize_inputs ;
+    %vpi_func 3 48 "$random" 32, v0x55b457635350_0 {0 0 0};
+    %pad/u 1;
+    %store/vec4 v0x55b457635240_0, 0, 1;
+    %vpi_func 3 49 "$random" 32, v0x55b457635350_0 {0 0 0};
+    %pad/u 1;
+    %store/vec4 v0x55b4576351a0_0, 0, 1;
+    %end;
+    .scope S_0x55b457614700;
+T_2 ;
+    %pushi/real 0, 4065; load=0.00000
+    %store/real v0x55b457634be0_0;
+    %pushi/real 0, 4065; load=0.00000
+    %store/real v0x55b457634ca0_0;
+    %end;
+    .thread T_2, $init;
+    .scope S_0x55b457614700;
+T_3 ;
+    %wait E_0x55b4575eee40;
+    %delay 5, 0;
+    %load/vec4 v0x55b4576350d0_0;
+    %load/vec4 v0x55b457635000_0;
+    %cmp/e;
+    %flag_get/vec4 6;
+    %load/vec4 v0x55b457634f30_0;
+    %load/vec4 v0x55b457634e20_0;
+    %cmp/e;
+    %flag_get/vec4 6;
+    %and;
+    %pushi/vec4 1, 0, 1;
+    %and;
+    %inv;
+    %store/vec4 v0x55b457635430_0, 0, 1;
+    %jmp T_3;
+    .thread T_3, $push;
+    .scope S_0x55b457614700;
+T_4 ;
+    %vpi_func 3 66 "$value$plusargs" 32, "seed=%d", v0x55b457635350_0 {0 0 0};
+    %nor/r;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.0, 8;
+    %pushi/vec4 0, 0, 32;
+    %store/vec4 v0x55b457635350_0, 0, 32;
+T_4.0 ;
+    %vpi_func 3 67 "$value$plusargs" 32, "outerLoopNum=%d", v0x55b457634d40_0 {0 0 0};
+    %nor/r;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.2, 8;
+    %pushi/vec4 100, 0, 32;
+    %store/vec4 v0x55b457634d40_0, 0, 32;
+T_4.2 ;
+    %vpi_func 3 68 "$value$plusargs" 32, "innerLoopNum=%d", v0x55b457634ae0_0 {0 0 0};
+    %nor/r;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.4, 8;
+    %pushi/vec4 1000, 0, 32;
+    %store/vec4 v0x55b457634ae0_0, 0, 32;
+T_4.4 ;
+    %load/vec4 v0x55b457634d40_0;
+T_4.6 %dup/vec4;
+    %pushi/vec4 0, 0, 32;
+    %cmp/s;
+    %jmp/1xz T_4.7, 5;
+    %jmp/1 T_4.7, 4;
+    %pushi/vec4 1, 0, 32;
+    %sub;
+    %delay 100, 0;
+    %fork TD_testbench.count_errors, S_0x55b457614890;
+    %join;
+    %load/vec4 v0x55b457634ae0_0;
+T_4.8 %dup/vec4;
+    %pushi/vec4 0, 0, 32;
+    %cmp/s;
+    %jmp/1xz T_4.9, 5;
+    %jmp/1 T_4.9, 4;
+    %pushi/vec4 1, 0, 32;
+    %sub;
+    %delay 100, 0;
+    %fork TD_testbench.randomize_inputs, S_0x55b457634900;
+    %join;
+    %delay 100, 0;
+    %fork TD_testbench.count_errors, S_0x55b457614890;
+    %join;
+    %jmp T_4.8;
+T_4.9 ;
+    %pop/vec4 1;
+    %jmp T_4.6;
+T_4.7 ;
+    %pop/vec4 1;
+    %vpi_call/w 3 79 "$display", "Number of all tests:  %d", v0x55b457634be0_0 {0 0 0};
+    %vpi_call/w 3 80 "$display", "Number of errors:     %d", v0x55b457634ca0_0 {0 0 0};
+    %load/real v0x55b457634ca0_0;
+    %load/real v0x55b457634be0_0;
+    %div/wr;
+    %vpi_call/w 3 81 "$display", "Error rate: %.8f", W<0,r> {0 1 0};
+    %load/real v0x55b457634ca0_0;
+    %pushi/vec4 0, 0, 32;
+    %cvt/rv/s;
+    %cmp/wr;
+    %flag_get/vec4 4;
+    %flag_set/vec4 8;
+    %jmp/0xz  T_4.10, 8;
+    %vpi_call/w 3 83 "$display", "All tests passed." {0 0 0};
+T_4.10 ;
+    %vpi_call/w 3 85 "$finish" {0 0 0};
+    %end;
+    .thread T_4;
+# The file index is used to find the file name in the following table.
+:file_names 5;
+    "N/A";
+    "<interactive>";
+    "-";
+    "./tmp/work/3ddb51767aaf6e30e9924708d0fc3766/tb.v";
+    "./tmp/work/3ddb51767aaf6e30e9924708d0fc3766/gate.v";
