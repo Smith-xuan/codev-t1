@@ -455,7 +455,7 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 
 # export USE_DIRECT_SANDBOX_API=true
 export IVERILOG_EXECUTION_METHOD=local_iverilog
-export SANDBOX_FUSION_CONCURRENCY=128 
+export SANDBOX_FUSION_CONCURRENCY=32 
 # source "/nfs_global/slime/scripts/models/qwen3-8B.sh"
 # Note: Megatron backend requires MODEL_ARGS to specify model architecture
 # (parameters like --swiglu, --num-layers, --hidden-size, etc.)

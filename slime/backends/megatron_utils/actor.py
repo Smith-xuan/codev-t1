@@ -97,7 +97,10 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.sleep()
             return
 
+        # Debug: log the loaded iteration
+        logger.info(f"[DEBUG] Actor rank {args.rank}: loaded_rollout_id (iteration) = {loaded_rollout_id}")
         start_rollout_id = loaded_rollout_id + 1
+        logger.info(f"[DEBUG] Actor rank {args.rank}: calculated start_rollout_id = {start_rollout_id}")
 
         self.weights_backuper = TensorBackuper.create(
             source_getter=lambda: named_params_and_buffers(

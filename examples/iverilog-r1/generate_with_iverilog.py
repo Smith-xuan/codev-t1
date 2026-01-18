@@ -92,7 +92,7 @@ _tool_call_stats = {
 IVERILOG_CONFIGS = {
     # ============== General Configuration ==============
     "max_turns": 6,  # Maximum number of tool call turns
-    "iverilog_concurrency": 128,  # Maximum concurrent iverilog executions (used for semaphore if not using SandboxFusion)
+    "iverilog_concurrency": 32,  # Maximum concurrent iverilog executions (reduced from 128 to prevent cpu starvation)
     # ============== Execution Method Configuration ==============
     # Options: "sandbox_fusion", "local_iverilog", "iverilog_server"
     # - "sandbox_fusion": Use SandboxFusion API (may have concurrency isolation issues)
@@ -102,8 +102,8 @@ IVERILOG_CONFIGS = {
     # ============== SandboxFusion Configuration ==============
     # Use SandboxFusion URL (can be overridden by environment variable SANDBOX_URL)
     "sandbox_fusion_url": os.getenv("SANDBOX_URL", os.getenv("IVERILOG_URL", "http://127.0.0.1:8181/run_code")),
-    "compile_timeout": 3,  # Compilation timeout in seconds
-    "run_timeout": 3,  # Execution timeout in seconds
+    "compile_timeout": 30,  # Compilation timeout in seconds (increased from 3s)
+    "run_timeout": 10,  # Execution timeout in seconds (increased from 3s)
     # ============== Log Probability Collection ==============
     "return_logprob": True,  # Set to True to collect log probabilities for TIS metrics
     # ============== Reward Model Configuration ==============

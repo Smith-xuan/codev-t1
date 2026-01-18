@@ -145,8 +145,31 @@ def create_training_models(args, pgs, rollout_manager):
     )
 
     assert len(set(start_rollout_ids)) == 1
+    # Debug: log the actual values
+    logger.info(f"[DEBUG] start_rollout_ids from actors: {start_rollout_ids}")
+    logger.info(f"[DEBUG] args.start_rollout_id before update: {args.start_rollout_id}")
+    logger.info(f"[DEBUG] start_rollout_ids[0]: {start_rollout_ids[0]}")
+    
+    # If user hasn't explicitly set start_rollout_id, use the value from checkpoint
+    # This allows resume training to work correctly even if slime_validate_args set it to 0
+    # IMPORTANT: Always use the value from checkpoint if it's available (start_rollout_ids[0] > 0)
+    # This ensures resume training works correctly even if slime_validate_args set it to 0
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
+        logger.info(f"[DEBUG] Set start_rollout_id from None to {args.start_rollout_id}")
+    elif args.start_rollout_id == 0:
+        # If start_rollout_id is 0 (default from slime_validate_args), check if checkpoint was loaded
+        # If checkpoint was loaded (start_rollout_ids[0] > 0), use the checkpoint value
+        # Otherwise, keep it as 0 (no checkpoint was loaded)
+        if start_rollout_ids[0] > 0:
+            logger.info(f"[DEBUG] Overriding start_rollout_id from 0 to {start_rollout_ids[0]} (checkpoint loaded)")
+            args.start_rollout_id = start_rollout_ids[0]
+        else:
+            logger.info(f"[DEBUG] Keeping start_rollout_id as 0 (no checkpoint was loaded)")
+    else:
+        logger.info(f"[DEBUG] Keeping start_rollout_id as {args.start_rollout_id} (user explicitly specified)")
+    
+    logger.info(f"[DEBUG] Final args.start_rollout_id: {args.start_rollout_id}")
 
     if args.use_critic:
         ray.get(critic_init_handle)

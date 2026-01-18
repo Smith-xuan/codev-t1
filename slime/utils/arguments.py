@@ -1446,7 +1446,10 @@ def slime_validate_args(args):
     if args.megatron_to_hf_mode == "bridge":
         if args.load is None:
             args.load = args.ref_load or args.hf_checkpoint
-        args.start_rollout_id = 0
+        # Only set start_rollout_id to 0 if user hasn't explicitly set it
+        # Otherwise, let placement_group.py use the value from checkpoint
+        if args.start_rollout_id is None:
+            args.start_rollout_id = 0
     else:
         if (
             args.load is None
@@ -1459,7 +1462,10 @@ def slime_validate_args(args):
             args.load = args.ref_load
             if args.ref_ckpt_step is not None:
                 args.ckpt_step = args.ref_ckpt_step
-        args.start_rollout_id = 0
+        # Only set start_rollout_id to 0 if user hasn't explicitly set it
+        # Otherwise, let placement_group.py use the value from checkpoint (loaded_rollout_id + 1)
+        if args.start_rollout_id is None:
+            args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."

@@ -101,6 +101,14 @@ def _compute_config_for_logging(args):
 def init_wandb_secondary(args, router_addr=None):
     wandb_run_id = getattr(args, "wandb_run_id", None)
     if wandb_run_id is None:
+        logger.warning(
+            "wandb_run_id is None in init_wandb_secondary. "
+            "WandB will not be initialized for this process. "
+            "Metrics logged from this process will not be recorded to WandB. "
+            "This usually happens when RolloutManager or other Ray actors are created before "
+            "the primary WandB run is initialized. "
+            "Make sure init_tracking(args, primary=True) is called before creating Ray actors."
+        )
         return
 
     # Set W&B mode if specified (same as primary)
@@ -151,9 +159,13 @@ def init_wandb_secondary(args, router_addr=None):
         os.makedirs(args.wandb_dir, exist_ok=True)
         init_kwargs["dir"] = args.wandb_dir
 
-    wandb.init(**init_kwargs)
-
-    _init_wandb_common()
+    try:
+        wandb.init(**init_kwargs)
+        _init_wandb_common()
+        logger.info(f"WandB secondary initialized successfully with run_id: {wandb_run_id}")
+    except Exception as e:
+        logger.error(f"Failed to initialize WandB secondary with run_id {wandb_run_id}: {e}")
+        raise
 
 
 def _init_wandb_common():

@@ -6,7 +6,7 @@
 set -e
 
 # 源模型路径 (HuggingFace 格式)
-HF_CHECKPOINT="/nfs_global/LLaMA-Factory/saves/qwen3-1.7b/full/tool_8.1k_ds32_resummrized_10epochs/checkpoint-1270"
+HF_CHECKPOINT="/nfs_global/codev-t1/models/Qwen2.5-Math-1.5B"
 
 # 输出路径 (Megatron 格式)
 OUTPUT_DIR="${HF_CHECKPOINT}_torch_dist"
@@ -99,6 +99,33 @@ echo "=========================================="
 
 # 运行转换脚本
 # 使用 torchrun 启动分布式转换
+# torchrun \
+#     --nproc_per_node=${NUM_GPUS} \
+#     --master_addr=${MASTER_ADDR} \
+#     --master_port=${MASTER_PORT} \
+#     "${SLIME_ROOT}/tools/convert_hf_to_torch_dist.py" \
+#     --hf-checkpoint "${HF_CHECKPOINT}" \
+#     --save "${OUTPUT_DIR}" \
+#     --swiglu \
+#     --num-layers 28 \
+#     --hidden-size 2048 \
+#     --ffn-hidden-size 6144 \
+#     --num-attention-heads 16 \
+#     --group-query-attention \
+#     --num-query-groups 8 \
+#     --use-rotary-position-embeddings \
+#     --disable-bias-linear \
+#     --normalization "RMSNorm" \
+#     --norm-epsilon 1e-6 \
+#     --rotary-base 1000000 \
+#     --vocab-size 151936 \
+#     --kv-channels 128 \
+#     --qk-layernorm \
+#     --tensor-model-parallel-size 1 \
+#     --pipeline-model-parallel-size 1 \
+#     --sequence-parallel \
+#     --use-distributed-optimizer
+
 torchrun \
     --nproc_per_node=${NUM_GPUS} \
     --master_addr=${MASTER_ADDR} \
@@ -108,23 +135,21 @@ torchrun \
     --save "${OUTPUT_DIR}" \
     --swiglu \
     --num-layers 28 \
-    --hidden-size 2048 \
-    --ffn-hidden-size 6144 \
-    --num-attention-heads 16 \
-    --group-query-attention \
-    --num-query-groups 8 \
+    --hidden-size 1536 \
+    --ffn-hidden-size 8960 \
+    --num-attention-heads 12 \
     --use-rotary-position-embeddings \
     --disable-bias-linear \
+    --add-qkv-bias \
     --normalization "RMSNorm" \
     --norm-epsilon 1e-6 \
-    --rotary-base 1000000 \
+    --rotary-base 10000 \
+    --group-query-attention \
+    --num-query-groups 2 \
     --vocab-size 151936 \
-    --kv-channels 128 \
-    --qk-layernorm \
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 1 \
     --sequence-parallel \
-    --use-distributed-optimizer
 
 echo "=========================================="
 echo "转换完成！"
