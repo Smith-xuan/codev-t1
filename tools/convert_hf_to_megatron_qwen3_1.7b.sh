@@ -6,7 +6,7 @@
 set -e
 
 # 源模型路径 (HuggingFace 格式)
-HF_CHECKPOINT="/nfs_global/codev-t1/models/Qwen2.5-Math-1.5B"
+HF_CHECKPOINT="/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270"
 
 # 输出路径 (Megatron 格式)
 OUTPUT_DIR="${HF_CHECKPOINT}_torch_dist"
@@ -16,43 +16,20 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 SLIME_ROOT="$(cd -- "${SCRIPT_DIR}/.." &>/dev/null && pwd)"
 
 # 检查并设置 Megatron-LM 路径
-# Megatron-LM-core: check if it exists
-if [ ! -d "/root/Megatron-LM-core" ]; then
-    if [ -d "/nfs_global/Megatron-LM-core" ]; then
-        ln -sf /nfs_global/Megatron-LM-core /root/Megatron-LM-core 2>/dev/null && echo "  ✓ Created /root/Megatron-LM-core -> /nfs_global/Megatron-LM-core" || echo "  ⚠ Could not create /root/Megatron-LM-core symlink"
-    else
-        echo "  ⚠ /root/Megatron-LM-core not found - may cause import errors"
-    fi
+# 适配实验室集群环境，使用 /workspace/S/shiwenxuan 路径
+MEGATRON_LM_PATH="/workspace/S/shiwenxuan/Megatron-LM"
+
+# 检查 Megatron-LM 是否存在
+if [ ! -d "$MEGATRON_LM_PATH" ]; then
+    echo "  ✗ ERROR: Megatron-LM not found at ${MEGATRON_LM_PATH}"
+    echo "  请确保 Megatron-LM 已安装在 /workspace/S/shiwenxuan/Megatron-LM"
+    exit 1
 else
-    echo "  ✓ /root/Megatron-LM-core already exists"
-fi
-
-# Megatron-LM: check if it exists
-if [ ! -d "/root/Megatron-LM" ]; then
-    if [ -d "/nfs_global/Megatron-LM" ]; then
-        ln -sf /nfs_global/Megatron-LM /root/Megatron-LM 2>/dev/null && echo "  ✓ Created /root/Megatron-LM -> /nfs_global/Megatron-LM" || echo "  ⚠ Could not create /root/Megatron-LM symlink"
-    else
-        echo "  ⚠ /root/Megatron-LM not found - may cause import errors"
-    fi
-else
-    echo "  ✓ /root/Megatron-LM already exists"
-fi
-
-# 设置 PYTHONPATH，包含 Megatron-LM 路径
-# 优先使用 /root/Megatron-LM，如果不存在则尝试 /nfs_global/Megatron-LM
-MEGATRON_LM_PATH="/root/Megatron-LM"
-MEGATRON_LM_CORE_PATH="/root/Megatron-LM-core"
-
-if [ ! -d "$MEGATRON_LM_PATH" ] && [ -d "/nfs_global/Megatron-LM" ]; then
-    MEGATRON_LM_PATH="/nfs_global/Megatron-LM"
-fi
-
-if [ ! -d "$MEGATRON_LM_CORE_PATH" ] && [ -d "/nfs_global/Megatron-LM-core" ]; then
-    MEGATRON_LM_CORE_PATH="/nfs_global/Megatron-LM-core"
+    echo "  ✓ Found Megatron-LM at ${MEGATRON_LM_PATH}"
 fi
 
 # 设置环境变量
-export PYTHONPATH="${MEGATRON_LM_PATH}:${MEGATRON_LM_CORE_PATH}:${SLIME_ROOT}:${PYTHONPATH}"
+export PYTHONPATH="${MEGATRON_LM_PATH}:${SLIME_ROOT}:${PYTHONPATH}"
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"}
 
 echo "PYTHONPATH: ${PYTHONPATH}"
@@ -126,6 +103,31 @@ echo "=========================================="
 #     --sequence-parallel \
 #     --use-distributed-optimizer
 
+# torchrun \
+#     --nproc_per_node=${NUM_GPUS} \
+#     --master_addr=${MASTER_ADDR} \
+#     --master_port=${MASTER_PORT} \
+#     "${SLIME_ROOT}/tools/convert_hf_to_torch_dist.py" \
+#     --hf-checkpoint "${HF_CHECKPOINT}" \
+#     --save "${OUTPUT_DIR}" \
+#     --swiglu \
+#     --num-layers 28 \
+#     --hidden-size 1536 \
+#     --ffn-hidden-size 8960 \
+#     --num-attention-heads 12 \
+#     --use-rotary-position-embeddings \
+#     --disable-bias-linear \
+#     --add-qkv-bias \
+#     --normalization "RMSNorm" \
+#     --norm-epsilon 1e-6 \
+#     --rotary-base 10000 \
+#     --group-query-attention \
+#     --num-query-groups 2 \
+#     --vocab-size 151936 \
+#     --tensor-model-parallel-size 1 \
+#     --pipeline-model-parallel-size 1 \
+#     --sequence-parallel \
+
 torchrun \
     --nproc_per_node=${NUM_GPUS} \
     --master_addr=${MASTER_ADDR} \
@@ -134,22 +136,25 @@ torchrun \
     --hf-checkpoint "${HF_CHECKPOINT}" \
     --save "${OUTPUT_DIR}" \
     --swiglu \
-    --num-layers 28 \
-    --hidden-size 1536 \
-    --ffn-hidden-size 8960 \
-    --num-attention-heads 12 \
+    --num-layers 36 \
+    --hidden-size 4096 \
+    --ffn-hidden-size 12288 \
+    --num-attention-heads 32 \
     --use-rotary-position-embeddings \
     --disable-bias-linear \
-    --add-qkv-bias \
     --normalization "RMSNorm" \
     --norm-epsilon 1e-6 \
-    --rotary-base 10000 \
+    --rotary-base 1000000 \
     --group-query-attention \
-    --num-query-groups 2 \
+    --num-query-groups 8 \
     --vocab-size 151936 \
+    --kv-channels 128 \
+    --qk-layernorm \
+    --untie-embeddings-and-output-weights \
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size 1 \
     --sequence-parallel \
+    --use-distributed-optimizer
 
 echo "=========================================="
 echo "转换完成！"
@@ -158,7 +163,7 @@ echo "=========================================="
 
 
 # megatron 转换为 HF 格式例子
-# PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
-#   --input-dir /nfs_global/LLaMA-Factory/saves/qwen3-8b/full/tool_8.1k_ds32_10epochs/megatron_slime_save/iter_0000049/ \
-#   --output-dir /nfs_global/LLaMA-Factory/saves/qwen3-8b/full/tool_8.1k_ds32_10epochs/megatron_slime_save/50steps \
-#   --origin-hf-dir /nfs_global/LLaMA-Factory/saves/qwen3-8b/full/tool_8.1k_ds32_10epochs
+# PYTHONPATH=/workspace/S/shiwenxuan/Megatron-LM python tools/convert_torch_dist_to_hf.py \
+#   --input-dir /nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/tool_8.1k_ds32_10epochs/megatron_slime_save/iter_0000049/ \
+#   --output-dir /nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/tool_8.1k_ds32_10epochs/megatron_slime_save/50steps \
+#   --origin-hf-dir /nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/tool_8.1k_ds32_10epochs

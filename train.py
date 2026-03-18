@@ -54,6 +54,14 @@ def train(args):
     if args.num_rollout == 0 and args.eval_interval is not None:
         ray.get(rollout_manager.eval.remote(rollout_id=0))
 
+    # Initial eval before training starts — gives a baseline to compare against.
+    # Runs unconditionally when eval_interval is set and skip_eval_before_train
+    # is False, regardless of start_rollout_id (which may have been adjusted by
+    # checkpoint loading).
+    if args.num_rollout > 0 and args.eval_interval is not None and not args.skip_eval_before_train:
+        print(f"[train] Running initial eval before training (start_rollout_id={args.start_rollout_id})")
+        ray.get(rollout_manager.eval.remote(rollout_id=args.start_rollout_id))
+
     def offload_train():
         if args.offload_train:
             if args.use_critic:
@@ -80,9 +88,6 @@ def train(args):
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
-        if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
-            ray.get(rollout_manager.eval.remote(rollout_id))
-
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload_rollout:

@@ -13,6 +13,7 @@ import asyncio
 import os
 import re
 import logging
+import resource
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
@@ -22,6 +23,19 @@ import time
 import tempfile
 import shutil
 import uuid
+
+# Memory limit per vvp subprocess (in bytes).  Prevents a single
+# model-generated testbench from consuming unbounded RAM (e.g. 1.8 TB)
+# and triggering an OOM kill on the whole Ray node.
+_VVP_MEM_LIMIT_BYTES = 4 * 1024 * 1024 * 1024  # 4 GB
+
+
+def _set_vvp_resource_limits():
+    """preexec_fn for vvp subprocesses: cap virtual address space."""
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_VVP_MEM_LIMIT_BYTES, _VVP_MEM_LIMIT_BYTES))
+    except (ValueError, OSError):
+        pass  # best-effort; some environments may restrict setrlimit
 
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
@@ -122,6 +136,26 @@ if SANDBOX_FUSION_AVAILABLE:
     logger.info(f"[iverilog-r1] Using SandboxFusion with client-side concurrency limit: {sandbox_concurrency}")
 else:
     SEMAPHORE = asyncio.Semaphore(IVERILOG_CONFIGS["iverilog_concurrency"])
+
+# Cache the iverilog tmp base directory so os.makedirs is only called once instead of on
+# every single invocation (avoids repeated NFS syscalls that block the event loop).
+_IVERILOG_TMP_BASE: str | None = None
+
+
+def _get_iverilog_tmp_base() -> str:
+    """Return the iverilog tmp base directory, creating it on first call."""
+    global _IVERILOG_TMP_BASE
+    if _IVERILOG_TMP_BASE is None:
+        base = os.getenv("IVERILOG_TMP_DIR", "/nfs_global/S/shiwenxuan/tmp/iverilog_tmp")
+        os.makedirs(base, exist_ok=True)
+        _IVERILOG_TMP_BASE = base
+    return _IVERILOG_TMP_BASE
+
+
+def _sync_write_file(path: str, content: str) -> None:
+    """Synchronous file write helper, meant to be called via asyncio.to_thread."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
 
 
 def postprocess_predictions(prediction: str):
@@ -430,29 +464,35 @@ async def _execute_iverilog_local(
     """
     MAX_OUTPUT_BYTES = 50 * 1024  # 50KB limit as requested
     MAX_TOTAL_OUTPUT_BYTES = 50 * 1024  # Total output limit
-    
-    # Use shared filesystem for temporary directories
-    iverilog_tmp_base = "/nfs_global/tmp/iverilog_tmp"
-    os.makedirs(iverilog_tmp_base, exist_ok=True)
-    
+
+    # Retrieve cached tmp base dir (makedirs only runs once across the entire process lifetime)
+    iverilog_tmp_base = _get_iverilog_tmp_base()
+
     # Create unique temporary directory for this execution
     # Using UUID ensures no conflicts even under high concurrency
     tmp_dir = None
     compile_process = None
     run_process = None
-    
+
     try:
-        # Create a unique temporary directory with UUID
-        tmp_dir = tempfile.mkdtemp(prefix=f"iverilog_{uuid.uuid4().hex[:8]}_", dir=iverilog_tmp_base)
+        # Create a unique temporary directory with UUID.
+        # Use asyncio.to_thread so the blocking NFS mkdtemp call does not stall the event loop.
+        tmp_dir = await asyncio.to_thread(
+            tempfile.mkdtemp,
+            prefix=f"iverilog_{uuid.uuid4().hex[:8]}_",
+            dir=iverilog_tmp_base,
+        )
         verilog_file = os.path.join(tmp_dir, "design.sv")
-        
-        # Write code to file
-        with open(verilog_file, 'w', encoding='utf-8') as f:
-            f.write(code)
+
+        # Write code to file via thread to avoid blocking the event loop on NFS writes.
+        await asyncio.to_thread(_sync_write_file, verilog_file, code)
         
         # Compile command: iverilog -Wall -Winfloop -Wno-timescale -g2012 -s testbench -o test.vvp design.sv
+        # Use environment variable IVERILOG_PATH if set, otherwise use default path
+        default_iverilog_path = "/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/iverilog"
+        iverilog_bin = os.getenv("IVERILOG_PATH", default_iverilog_path)
         compile_cmd = [
-            "iverilog",
+            iverilog_bin,
             "-Wall",
             "-Winfloop",
             "-Wno-timescale",
@@ -468,7 +508,8 @@ async def _execute_iverilog_local(
                 *compile_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=tmp_dir
+                cwd=tmp_dir,
+                preexec_fn=_set_vvp_resource_limits,
             )
             
             try:
@@ -516,7 +557,8 @@ async def _execute_iverilog_local(
             return api_response, None
         
         # Run command: vvp -n test.vvp
-        run_cmd = ["vvp", "-n", os.path.join(tmp_dir, "test.vvp")]
+        vvp_bin = os.getenv("VVP_PATH", "/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/vvp")
+        run_cmd = [vvp_bin, "-n", os.path.join(tmp_dir, "test.vvp")]
         
         async def _run():
             nonlocal run_process
@@ -524,7 +566,8 @@ async def _execute_iverilog_local(
                 *run_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=tmp_dir
+                cwd=tmp_dir,
+                preexec_fn=_set_vvp_resource_limits,
             )
             
             try:
@@ -638,12 +681,9 @@ async def _execute_iverilog_local(
             except Exception:
                 pass
         
-        # Clean up temporary directory
-        if tmp_dir and os.path.exists(tmp_dir):
-            try:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            except Exception as e:
-                logger.warning(f"[iverilog-r1] Failed to clean up temp directory {tmp_dir}: {e}")
+        # Clean up temporary directory via thread to avoid blocking the event loop on NFS.
+        if tmp_dir:
+            await asyncio.to_thread(shutil.rmtree, tmp_dir, True)
 
 
 def _parse_sandbox_fusion_response(api_response: Dict[str, Any]) -> Dict[str, Any]:
@@ -1246,12 +1286,27 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     3. Receive tool response
     4. Continue until final answer is provided
     """
-    assert not args.partial_rollout, "Partial rollout is not supported for this function at the moment."
-    
+    # partial_rollout is supported: if a sample arrives with a partial response
+    # (e.g. from a previous rollout step), reset it to a fresh state and regenerate
+    # from scratch.  This is safe because fully_async never aborts mid-generation;
+    # the only samples returned to the buffer are those with ABORTED status
+    # (response_length == 0).  For any edge-case where a partial response did
+    # accumulate, restarting is the most robust choice for multi-turn iverilog.
+    if getattr(args, "partial_rollout", False) and sample.response_length > 0:
+        if sample.status not in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED):
+            logger.debug(
+                f"[partial_rollout] Resetting sample with partial response "
+                f"(response_length={sample.response_length}) to fresh state."
+            )
+            sample.response = ""
+            sample.response_length = 0
+            sample.tokens = []
+            sample.loss_mask = []
+
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
-    
-    # Handle partial rollout samples: continue generation from existing response
+
+    # Handle prompt formatting
     prompt = sample.prompt
     if args.apply_chat_template:
         # When apply_chat_template is True, Dataset may have already applied the template
@@ -1324,32 +1379,39 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     loss_mask = []
     rollout_log_probs = [] if IVERILOG_CONFIGS["return_logprob"] else None
     output = None  # Initialize output to handle early breaks
-    
+
+    # ── per-sample timing accumulators ──────────────────────────────────────
+    _t_generate_start = time.monotonic()
+    _t_llm  = 0.0   # cumulative time blocked in await post() (LLM inference)
+    _t_tool = 0.0   # cumulative time blocked in await execute_predictions()
+    _n_turns = 0    # how many turns were executed
+
+    # SAFETY_MARGIN is constant across turns; define it once outside the loop.
+    SAFETY_MARGIN = 100  # Reserve tokens for special tokens that SGLang may add
+
     for _turn_idx in range(IVERILOG_CONFIGS["max_turns"]):
-        # Check total length before sending request
+        # Check total length before sending request.
+        # Use incremental counting (prompt computed once + accumulated response token IDs) instead
+        # of re-tokenizing the full prompt+response string on every turn — the latter is O(N) in
+        # total tokens and becomes expensive for long multi-turn contexts (up to ~36k tokens).
+        current_token_count = len(prompt_tokens_ids) + len(response_token_ids)
         current_text = prompt_text + response
-        current_tokens = state.tokenizer(current_text, add_special_tokens=False)["input_ids"]
         max_new_tokens = sampling_params.get("max_new_tokens", 0)
-        
-        # Reserve some margin for special tokens that SGLang might add (e.g., BOS/EOS)
-        # SGLang may reject requests where input + max_new_tokens >= max_context_len
-        SAFETY_MARGIN = 100  # Reserve 100 tokens for special tokens and safety margin
-        
+
         # If input itself exceeds max_context_len (with safety margin), stop and use current response as final answer
-        if len(current_tokens) > max_context_len - SAFETY_MARGIN:
+        if current_token_count > max_context_len - SAFETY_MARGIN:
             logger.warning(f"Turn {_turn_idx}: Input (prompt + accumulated response) exceeds maximum context length (with safety margin)!")
-            logger.warning(f"Current token count: {len(current_tokens)}, max (with margin): {max_context_len - SAFETY_MARGIN}")
-            logger.warning(f"Exceeded by: {len(current_tokens) - (max_context_len - SAFETY_MARGIN)} tokens")
+            logger.warning(f"Current token count: {current_token_count}, max (with margin): {max_context_len - SAFETY_MARGIN}")
+            logger.warning(f"Exceeded by: {current_token_count - (max_context_len - SAFETY_MARGIN)} tokens")
             logger.warning("Stopping generation and using current response as final answer")
             sample.status = Sample.Status.TRUNCATED
             break
-        
+
         # Check if total length (input + max_new_tokens) would exceed limit (with safety margin)
         # Use >= instead of > to be more conservative, as SGLang may reject when input + max_new_tokens >= max_context_len
-        if len(current_tokens) + max_new_tokens >= max_context_len - SAFETY_MARGIN:
-            # logger.warning(f"Turn {_turn_idx}: Total length ({len(current_tokens)} + {max_new_tokens}) would exceed max_context_len ({max_context_len}, with {SAFETY_MARGIN} token safety margin), truncating response length")
+        if current_token_count + max_new_tokens >= max_context_len - SAFETY_MARGIN:
             # Adjust max_new_tokens to fit within context (with safety margin)
-            sampling_params["max_new_tokens"] = max(0, max_context_len - SAFETY_MARGIN - len(current_tokens))
+            sampling_params["max_new_tokens"] = max(0, max_context_len - SAFETY_MARGIN - current_token_count)
             if sampling_params["max_new_tokens"] == 0:
                 logger.warning("No room for new tokens, stopping generation")
                 sample.status = Sample.Status.TRUNCATED
@@ -1363,8 +1425,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         if IVERILOG_CONFIGS["return_logprob"]:
             payload["return_logprob"] = True
         
+        _t0 = time.monotonic()
         output = await post(url, payload)
-        
+        _t_llm += time.monotonic() - _t0
+        _n_turns += 1
+
         # abort
         if output["meta_info"]["finish_reason"]["type"] == "abort":
             sample.status = Sample.Status.ABORTED
@@ -1412,7 +1477,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             break
         
         # Extract tool calls from current response (not accumulated, to avoid duplicate extraction)
+        _t0 = time.monotonic()
         next_obs, done = await execute_predictions(cur_response)
+        _t_tool += time.monotonic() - _t0
         
         # DEBUG: Log tool response insertion
         logger.debug(f"[iverilog-r1] Turn {_turn_idx}: next_obs length={len(next_obs)}, done={done}, "
@@ -1446,16 +1513,24 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             ), f"Token/logp length mismatch: {len(response_token_ids)} tokens vs {len(rollout_log_probs)} logps"
         
         # Check total length after adding tool feedback - if exceeds limit, stop and use current response
-        # Use the same safety margin as before
-        current_text_after_tool = prompt_text + response
-        current_tokens_after_tool = state.tokenizer(current_text_after_tool, add_special_tokens=False)["input_ids"]
-        if len(current_tokens_after_tool) > max_context_len - SAFETY_MARGIN:
-            logger.warning(f"Turn {_turn_idx}: After tool feedback, total length ({len(current_tokens_after_tool)}) exceeds max_context_len ({max_context_len}, with {SAFETY_MARGIN} token safety margin)")
-            logger.warning(f"Exceeded by: {len(current_tokens_after_tool) - (max_context_len - SAFETY_MARGIN)} tokens")
+        # Use incremental count: prompt tokens + accumulated response tokens (no re-tokenization needed)
+        token_count_after_tool = len(prompt_tokens_ids) + len(response_token_ids)
+        if token_count_after_tool > max_context_len - SAFETY_MARGIN:
+            logger.warning(f"Turn {_turn_idx}: After tool feedback, total length ({token_count_after_tool}) exceeds max_context_len ({max_context_len}, with {SAFETY_MARGIN} token safety margin)")
+            logger.warning(f"Exceeded by: {token_count_after_tool - (max_context_len - SAFETY_MARGIN)} tokens")
             logger.warning("Stopping generation and using current response as final answer")
             sample.status = Sample.Status.TRUNCATED
             break
     
+    # ── store per-sample timing for rollout breakdown logging ───────────────
+    _t_generate_total = time.monotonic() - _t_generate_start
+    if not hasattr(sample, '_timing'):
+        sample._timing = {}
+    sample._timing['t_llm']            = _t_llm
+    sample._timing['t_tool']           = _t_tool
+    sample._timing['t_generate_total'] = _t_generate_total
+    sample._timing['n_turns']          = _n_turns
+
     # Store statistics for wandb logging
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
@@ -1607,7 +1682,12 @@ async def reward_func(args, sample, **kwargs):
             
             # CodeV 等价性验证
             result: Dict[str, Any] = run_function_with_timeout(verify_one_sample, gt, cleaned)
+            
+            # DEBUG LOGGING
+            logger.info(f"[iverilog-r1] Verification result: {result}")
+            
             if not isinstance(result, dict):
+                logger.warning(f"[iverilog-r1] Verification result is not a dict: {result}")
                 return 0.0
             
             if result.get("correct", False):

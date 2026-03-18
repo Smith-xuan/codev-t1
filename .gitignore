@@ -182,8 +182,11 @@ local/
 **/rollout_data/
 **/buffer_stats/
 *.out
+*.err
 *.pkl
 *.code-workspace
+*.bak
+*.pid
 
 .idea
 *.iml
@@ -192,3 +195,9 @@ glm/
 _examples_synced/
 .env
 .DS_Store
+
+# iverilog-r1 / example runtime artifacts
+examples/iverilog-r1/empty_output_codes/
+examples/*/ret_one/
+examples/*/tmp/
+examples/iverilog-r1/report.txt

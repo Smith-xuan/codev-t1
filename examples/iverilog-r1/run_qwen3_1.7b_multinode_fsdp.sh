@@ -452,7 +452,7 @@ WANDB_ARGS=(
    --wandb-mode offline # 离线模式，不上传数据到wandb
    --wandb-project verl_onpolicy_modified_format_reward_slime  # Matching verl's project_name
    --wandb-group codev_onpolicy_modified_format_reward_slime   # Matching verl's experiment_name
-   --wandb-key 'e8f26cb646aea4a12ef982270212804afa4fa31e'
+   ${WANDB_API_KEY:+--wandb-key "${WANDB_API_KEY}"}
 )
 
 SGLANG_ARGS=(

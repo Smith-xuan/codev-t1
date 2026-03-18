@@ -114,7 +114,7 @@ class RolloutManager:
     def eval(self, rollout_id):
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
-            return
+            return None
 
         # TODO: add fault tolerance to eval
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
@@ -123,6 +123,15 @@ class RolloutManager:
         metrics = _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)
+        return metrics
+
+    def set_dataset_filter(self, task_ids):
+        """Update the training-data curriculum filter.
+
+        task_ids: list of task_id strings to keep, or None to clear filter.
+        Called by the driver after each eval to implement dynamic curriculum.
+        """
+        self.data_source.set_task_id_filter(task_ids)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -581,7 +590,14 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
         if custom_log_func(rollout_id, args, data, extra_metrics):
             return
 
-    log_dict = extra_metrics or {}
+    # Keys starting with "_" are private (non-scalar payloads for the driver, e.g.
+    # task_id lists for curriculum updates). Strip them before logging to wandb.
+    if extra_metrics:
+        private_keys = [k for k in extra_metrics if k.startswith("_")]
+        log_dict = {k: v for k, v in extra_metrics.items() if not k.startswith("_")}
+    else:
+        private_keys = []
+        log_dict = {}
     for key in data.keys():
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
@@ -604,6 +620,12 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
     step = compute_rollout_step(args, rollout_id)
     log_dict["eval/step"] = step
     tracking_utils.log(args, log_dict, step_key="eval/step")
+
+    # Reattach private keys so the driver (train_async.py) can read them
+    # (they were stripped only for wandb logging above).
+    if extra_metrics:
+        for k in private_keys:
+            log_dict[k] = extra_metrics[k]
 
     return log_dict
 

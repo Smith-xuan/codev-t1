@@ -2,6 +2,7 @@ import abc
 import copy
 import logging
 import os
+import random
 from pathlib import Path
 
 import torch
@@ -51,6 +52,8 @@ class RolloutDataSource(DataSource):
         self.sample_offset = 0
         # TODO remove this
         self.metadata = {}
+        # Dynamic curriculum filter: None = no filter (use full dataset)
+        self._filtered_samples = None
 
         if args.rollout_global_dataset:
             tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
@@ -81,19 +84,65 @@ class RolloutDataSource(DataSource):
         else:
             self.dataset = None
 
+    @property
+    def active_samples(self):
+        """Return the currently active sample list (filtered or full dataset)."""
+        if self._filtered_samples is not None:
+            return self._filtered_samples
+        return self.dataset.samples if self.dataset is not None else None
+
+    def _shuffle_active(self):
+        """Shuffle whichever list is active (filtered or full dataset)."""
+        if self._filtered_samples is not None:
+            seed = getattr(self.dataset, "seed", 42) if self.dataset is not None else 42
+            random.seed(seed + self.epoch_id)
+            random.shuffle(self._filtered_samples)
+        elif self.dataset is not None:
+            self.dataset.shuffle(self.epoch_id)
+
+    def set_task_id_filter(self, task_ids):
+        """Filter training prompts to those whose metadata["task_id"] is in task_ids.
+
+        Pass None to clear the filter and use the full dataset.
+        Resets sample_offset so the next generate() starts from the beginning of
+        the new filtered list.
+        """
+        if self.dataset is None:
+            return
+        if task_ids is None:
+            self._filtered_samples = None
+            self.sample_offset = 0
+            logger.info("Dataset filter cleared: using all %d samples", len(self.dataset.origin_samples))
+            return
+        task_id_set = set(task_ids)
+        self._filtered_samples = [
+            s for s in self.dataset.origin_samples
+            if s.metadata.get("task_id", "") in task_id_set
+        ]
+        self.sample_offset = 0
+        if self.args.rollout_shuffle and self._filtered_samples:
+            random.seed(getattr(self.dataset, "seed", 42) + self.epoch_id)
+            random.shuffle(self._filtered_samples)
+        logger.info(
+            "Dataset filter updated: %d / %d samples active (task_ids=%d requested)",
+            len(self._filtered_samples), len(self.dataset.origin_samples), len(task_id_set),
+        )
+
     def get_samples(self, num_samples):
         # TODO further improve code
-        if self.dataset is not None:
-            if self.sample_offset + num_samples <= len(self.dataset):
-                prompt_samples = self.dataset.samples[self.sample_offset : self.sample_offset + num_samples]
+        active = self.active_samples
+        if active is not None:
+            if self.sample_offset + num_samples <= len(active):
+                prompt_samples = active[self.sample_offset : self.sample_offset + num_samples]
                 self.sample_offset += num_samples
             else:
-                prompt_samples = self.dataset.samples[self.sample_offset :]
+                prompt_samples = active[self.sample_offset :]
                 num_samples -= len(prompt_samples)
                 self.epoch_id += 1
                 if self.args.rollout_shuffle:
-                    self.dataset.shuffle(self.epoch_id)
-                prompt_samples += self.dataset.samples[:num_samples]
+                    self._shuffle_active()
+                    active = self.active_samples
+                prompt_samples += active[:num_samples]
                 self.sample_offset = num_samples
         else:
             prompt_samples = [Sample() for _ in range(num_samples)]
