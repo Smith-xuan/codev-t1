@@ -1,0 +1,9 @@
+services:
+
+  auto:
+    image: __OSS_SIM_IMAGE__
+    env_file    : ./src/.env
+    volumes:
+      - ./src:/src/:ro
+    command     : >
+      sh -c "pip install aes && pytest -s -o cache_dir=/rundir/harness/.cache /src/test_runner.py -v"

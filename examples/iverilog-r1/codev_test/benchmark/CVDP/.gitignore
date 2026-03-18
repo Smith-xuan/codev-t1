@@ -1,0 +1,16 @@
+cvdp_*
+*.json
+*.jsonl
+!/example_dataset/*.jsonl
+!/data/raw/*.jsonl
+*.log
+__pycache__
+/.env
+/custom_factory
+/experiment*
+work*/
+work_*.txt
+/dataset_analysis*
+/refinement_analysis*
+/failure_analysis*/
+/model_sweep_results*

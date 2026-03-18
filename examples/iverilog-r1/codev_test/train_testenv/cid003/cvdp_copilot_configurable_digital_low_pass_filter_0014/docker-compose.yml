@@ -1,0 +1,9 @@
+services:
+
+  direct:
+    image: __OSS_SIM_IMAGE__
+    volumes:
+      - ./src/:/src/:ro # Infrastructure location
+    working_dir : /code/rundir
+    env_file    : ./src/.env
+    command     : /bin/sh -c "pytest -s -o cache_dir=/rundir/harness/.cache /src/test_runner.py -s"

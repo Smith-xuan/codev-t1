@@ -201,3 +201,8 @@ examples/iverilog-r1/empty_output_codes/
 examples/*/ret_one/
 examples/*/tmp/
 examples/iverilog-r1/report.txt
+
+# CVDP codev_test runtime outputs (benchmark data and scripts are committed,
+# but evaluation results and per-run outputs are not)
+examples/iverilog-r1/codev_test/results/
+examples/iverilog-r1/codev_test/*/results/

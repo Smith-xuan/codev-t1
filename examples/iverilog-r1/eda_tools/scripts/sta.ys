@@ -1,0 +1,59 @@
+#**************************************************************
+# Initialization and Parameter Settings
+#**************************************************************
+set sc_design {top_module}
+set sc_scenarios "worst"
+set sc_delaymodel "nldm"
+
+set sc_sdc {base_dir}/files_needed/sc_constraints.sdc
+
+#**************************************************************
+# Load Technology Libraries
+#**************************************************************
+puts "Defining timing corners: $sc_scenarios"
+define_corners $sc_scenarios
+set sc_targetlibs "{t_ech}"
+puts "Reading liberty file for worst (typical): $sc_targetlibs"
+read_liberty -corner worst $sc_targetlibs
+
+#**************************************************************
+# Load Design Netlist
+#**************************************************************
+read_verilog {file_path}g
+link_design $sc_design
+
+#**************************************************************
+# Load Timing Constraints (SDC)
+#**************************************************************
+puts "Reading SDC: $sc_sdc"
+read_sdc $sc_sdc
+
+#**************************************************************
+# Timing Analysis and Report Generation
+#**************************************************************
+
+# Retain only the critical report generation commands, others are commented out
+# Setup Time Analysis (Setup) - Commented out unnecessary reports
+# report_checks -path_delay max -format full_clock_expanded > reports/setup.rpt
+# report_worst_slack -max > reports/worst_slack.setup.rpt
+# report_tns > reports/tns.setup.rpt
+
+# Retain unconstrained path report
+puts "SC_METRIC: report_checks -unconstrained"
+report_checks -unconstrained > reports/{file_id}/unconstrained.rpt
+
+#**************************************************************
+# Power Analysis
+#**************************************************************
+puts "SC_METRIC: report_power"
+report_power -corner worst > reports/{file_id}/power.rpt
+
+#**************************************************************
+# Other Statistics (Optional Retention)
+#**************************************************************
+puts "SC_METRIC: cellarea"
+if { [catch {sc_design_area} area] } {
+    puts "Error: Area calculation failed. Check design hierarchy."
+} else {
+    puts "Total cell area: $area um²"
+}

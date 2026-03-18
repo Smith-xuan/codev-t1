@@ -62,6 +62,7 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 SLIME_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
+IVERILOG_R1_DIR="${SCRIPT_DIR}"
 
 # === Disable HTTP proxy ===
 unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY ftp_proxy FTP_PROXY
@@ -262,7 +263,7 @@ SANDBOX_URL="http://${MASTER_IP}:${SANDBOX_PORT}/run_code"
 # === Start SandboxFusion (Master Only) ===
 if [ "$NODE_RANK" -eq 0 ]; then
     echo "Starting SandboxFusion server..."
-    SANDBOX_DIR="/workspace/S/shiwenxuan/verl/SandboxFusion"
+    SANDBOX_DIR="${SANDBOX_DIR:-/workspace/S/shiwenxuan/verl/SandboxFusion}"
 
     if [ ! -d "$SANDBOX_DIR" ]; then
         echo "ERROR: SandboxFusion directory not found at $SANDBOX_DIR"
@@ -292,26 +293,42 @@ else
     sleep 5
 fi
 
-# === Model Config ===
-MODEL_PATH=/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270
+# === Tool Paths ===
+# Auto-detect from PATH if not set. Override in launch script or environment.
+export IVERILOG_PATH="${IVERILOG_PATH:-$(which iverilog 2>/dev/null || echo iverilog)}"
+export VVP_PATH="${VVP_PATH:-$(which vvp 2>/dev/null || echo vvp)}"
+export YOSYS_PATH="${YOSYS_PATH:-$(which yosys 2>/dev/null || echo yosys)}"
+# Extra binary directory to add to PATH in Ray workers (e.g. for iverilog/vvp/yosys).
+# Leave empty if tools are already on PATH in the worker environment.
+export CVDP_EXTRA_BIN_PATH="${CVDP_EXTRA_BIN_PATH:-}"
 
-# Full 172-problem dataset — dynamic curriculum filter applied at runtime based on
-# per-eval pass counts (problems with 1–(n-1)/n passes selected as training data).
-DATA_PATH=/nfs_global/S/shiwenxuan/verl/data/codev/v1/cvdp_testbench_172
+# === Data Paths ===
+# Default to in-repo data; override with NFS/shared paths for large-scale runs.
+export CODEV_TEST_ROOT="${CODEV_TEST_ROOT:-${IVERILOG_R1_DIR}/codev_test}"
+export CVDP_TESTENV_ROOT="${CVDP_TESTENV_ROOT:-${IVERILOG_R1_DIR}/codev_test/train_testenv}"
+DATA_PATH="${DATA_PATH:-${IVERILOG_R1_DIR}/data/cvdp_testbench_172}"
 TRAIN_FILE="train.parquet"
-echo "=== Training dataset: ${DATA_PATH}/${TRAIN_FILE} (dynamic curriculum) ==="
 
-# Pre-generated CVDP test environments (run cvdp_preprocess.py once to create)
-export CVDP_TESTENV_ROOT=/workspace/S/shiwenxuan/codev_test/train_testenv
+echo "=== Training dataset: ${DATA_PATH}/${TRAIN_FILE} (dynamic curriculum) ==="
+echo "=== CVDP_TESTENV_ROOT: ${CVDP_TESTENV_ROOT} ==="
+
+# === Model Config ===
+MODEL_PATH="${MODEL_PATH:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270}"
+CKPT_BASE="${CKPT_BASE:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist}"
 
 export TOKENIZERS_PARALLELISM=false
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 export IVERILOG_EXECUTION_METHOD=local_iverilog
 export SANDBOX_FUSION_CONCURRENCY=32
 export IVERILOG_URL="${SANDBOX_URL}"
-export IVERILOG_PATH="${IVERILOG_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/iverilog}"
-export VVP_PATH="${VVP_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/vvp}"
-export IVERILOG_TMP_DIR="${IVERILOG_TMP_DIR:-/nfs_global/S/shiwenxuan/tmp/iverilog_tmp}"
+export IVERILOG_TMP_DIR="${IVERILOG_TMP_DIR:-/tmp/iverilog_tmp}"
+
+# === Python dependency paths for Ray workers ===
+MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/workspace/S/shiwenxuan/Megatron-LM}"
+SGLANG_GATEWAY_PATH="${SGLANG_GATEWAY_PATH:-/workspace/S/shiwenxuan/sglang/sgl-model-gateway/bindings/python}"
+SGLANG_PYTHON_PATH="${SGLANG_PYTHON_PATH:-/workspace/S/shiwenxuan/sglang/python}"
+VERL_PATH="${VERL_PATH:-/workspace/S/shiwenxuan/verl}"
+RAY_WORKER_PYTHONPATH="${SGLANG_GATEWAY_PATH}:${MEGATRON_LM_PATH}:${SCRIPT_DIR}:${SLIME_ROOT}:${SGLANG_PYTHON_PATH}:${VERL_PATH}:${IVERILOG_R1_DIR}/eda_tools"
 
 MODEL_ARGS=(
    --swiglu
@@ -334,9 +351,9 @@ MODEL_ARGS=(
 
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_PATH}
-   --ref-load /nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist
-   --load /nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6
-   --save /nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6
+   --ref-load ${CKPT_BASE}
+   --load ${CKPT_BASE}/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6
+   --save ${CKPT_BASE}/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6
    --save-interval 10
 )
 
@@ -366,7 +383,7 @@ ROLLOUT_ARGS=(
 #    --mask-offpolicy-in-partial-rollout
 
    --eval-interval 20
-   --eval-prompt-data codev_test ${DATA_PATH}/test.parquet
+   --eval-prompt-data codev_test ${DATA_PATH}/train.parquet
    --eval-input-key prompt
    --eval-label-key reward_model
    --eval-tool-key tools
@@ -543,16 +560,17 @@ if [ "$NODE_RANK" -eq 0 ]; then
     # pytest executable whose Python env has cocotb + all CVDP test packages.
     # The Ray workers run under a micromamba env that lacks pytest/cocotb, so
     # we must point explicitly to the correct pytest binary.
-    CVDP_PYTEST_PATH="${CVDP_PYTEST_PATH:-/nfs_global/S/shiwenxuan/miniconda3/envs/slime/bin/pytest}"
+    CVDP_PYTEST_PATH="${CVDP_PYTEST_PATH:-$(which pytest 2>/dev/null || echo pytest)}"
 
     RUNTIME_ENV_JSON=$(jq -n \
-        --arg PYTHONPATH "/workspace/S/shiwenxuan/sglang/sgl-model-gateway/bindings/python:/workspace/S/shiwenxuan/Megatron-LM/:${SCRIPT_DIR}:${SLIME_ROOT}:/workspace/S/shiwenxuan/slime:/workspace/S/shiwenxuan/sglang/python:/workspace/S/shiwenxuan/verl:/workspace/S/shiwenxuan/verl/eda_tools" \
+        --arg PYTHONPATH "${RAY_WORKER_PYTHONPATH}" \
         --arg CUDA_DEVICE_MAX_CONNECTIONS "1" \
         --arg SANDBOX_URL "${SANDBOX_URL}" \
         --arg IVERILOG_URL "${IVERILOG_URL}" \
         --arg IVERILOG_EXECUTION_METHOD "${IVERILOG_EXECUTION_METHOD}" \
         --arg IVERILOG_PATH "${IVERILOG_PATH}" \
         --arg VVP_PATH "${VVP_PATH}" \
+        --arg YOSYS_PATH "${YOSYS_PATH}" \
         --arg IVERILOG_TMP_DIR "${IVERILOG_TMP_DIR}" \
         --arg SANDBOX_FUSION_CONCURRENCY "${SANDBOX_FUSION_CONCURRENCY}" \
         --arg NCCL_SOCKET_IFNAME "${NETWORK_INTERFACE}" \
@@ -561,9 +579,11 @@ if [ "$NODE_RANK" -eq 0 ]; then
         --arg NCCL_IB_DISABLE "${NCCL_IB_DISABLE}" \
         --arg NO_PROXY "${NO_PROXY}" \
         --arg no_proxy "${no_proxy}" \
-        --arg YOSYS_PATH "/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/yosys" \
         --arg CVDP_TESTENV_ROOT "${CVDP_TESTENV_ROOT}" \
         --arg CVDP_PYTEST_PATH "${CVDP_PYTEST_PATH}" \
+        --arg CVDP_EXTRA_BIN_PATH "${CVDP_EXTRA_BIN_PATH}" \
+        --arg CODEV_TEST_ROOT "${CODEV_TEST_ROOT}" \
+        --arg VERL_PATH "${VERL_PATH}" \
         '{
             "env_vars": {
                 "PYTHONPATH": $PYTHONPATH,
@@ -573,6 +593,7 @@ if [ "$NODE_RANK" -eq 0 ]; then
                 "IVERILOG_EXECUTION_METHOD": $IVERILOG_EXECUTION_METHOD,
                 "IVERILOG_PATH": $IVERILOG_PATH,
                 "VVP_PATH": $VVP_PATH,
+                "YOSYS_PATH": $YOSYS_PATH,
                 "IVERILOG_TMP_DIR": $IVERILOG_TMP_DIR,
                 "SANDBOX_FUSION_CONCURRENCY": $SANDBOX_FUSION_CONCURRENCY,
                 "NCCL_SOCKET_IFNAME": $NCCL_SOCKET_IFNAME,
@@ -581,9 +602,11 @@ if [ "$NODE_RANK" -eq 0 ]; then
                 "NCCL_IB_DISABLE": $NCCL_IB_DISABLE,
                 "NO_PROXY": $NO_PROXY,
                 "no_proxy": $no_proxy,
-                "YOSYS_PATH": $YOSYS_PATH,
                 "CVDP_TESTENV_ROOT": $CVDP_TESTENV_ROOT,
-                "CVDP_PYTEST_PATH": $CVDP_PYTEST_PATH
+                "CVDP_PYTEST_PATH": $CVDP_PYTEST_PATH,
+                "CVDP_EXTRA_BIN_PATH": $CVDP_EXTRA_BIN_PATH,
+                "CODEV_TEST_ROOT": $CODEV_TEST_ROOT,
+                "VERL_PATH": $VERL_PATH
             }
         }')
 

@@ -1,0 +1,9 @@
+services:
+  test:
+    image: __OSS_SIM_IMAGE__
+    volumes:
+      - ./src/:/src
+    working_dir: /code/rundir/
+    env_file:
+      - ./src/.env
+    command: pytest -sv -o cache_dir=/code/rundir/.cache /src/test_runner.py

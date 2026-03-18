@@ -1,0 +1,10 @@
+services:
+
+  1-complete-rtl:
+    image: __OSS_SIM_IMAGE__:latest
+    volumes:
+      - ./src/:/src/:ro
+    working_dir : /code/rundir
+    env_file    : ./src/.env
+    command     : pytest -s -o cache_dir=/rundir/harness/.cache /src/test_runner.py -v
+

@@ -110,9 +110,17 @@ async def _custom_eval_cvdp_async(
     """
     logger.info(f"Starting CVDP custom evaluation for rollout {rollout_id}")
 
-    # Configuration Paths
-    BENCHMARK_PATH = "/workspace/S/shiwenxuan/verl/data/test/cvdp-codegeneration-codev-tool-1.parquet"
-    CODEV_TEST_ROOT = "/workspace/S/shiwenxuan/codev_test"
+    # Configuration Paths — all configurable via environment variables.
+    # Defaults point to paths within the slime repo (examples/iverilog-r1/).
+    _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+    BENCHMARK_PATH = os.environ.get(
+        "CVDP_BENCHMARK_PATH",
+        os.path.join(_THIS_DIR, "data/eval_parquet/cvdp-codegeneration-codev-tool-1.parquet"),
+    )
+    CODEV_TEST_ROOT = os.environ.get(
+        "CODEV_TEST_ROOT",
+        os.path.join(_THIS_DIR, "codev_test"),
+    )
     # Filtered benchmark JSONL containing only cid002/cid003 (172 questions)
     BENCHMARK_JSONL_PATH = os.path.join(
         CODEV_TEST_ROOT, "benchmark/CVDP/data/raw/cvdp_v1.0.2_cid002_cid003.jsonl"
@@ -283,8 +291,12 @@ async def _custom_eval_cvdp_async(
 
     # Load training-set problem IDs so we can classify eval results into
     # easy / medium (training set) / hard.
-    _STAGE1_PATH = "/nfs_global/S/shiwenxuan/verl/data/codev/v1/cvdp_testbench_staged/stage1_medium.jsonl"
-    _STAGE2_PATH = "/nfs_global/S/shiwenxuan/verl/data/codev/v1/cvdp_testbench_staged/stage2_hard.jsonl"
+    _STAGED_DIR = os.environ.get(
+        "CVDP_STAGED_DATA_DIR",
+        os.path.join(_THIS_DIR, "data/cvdp_testbench_staged"),
+    )
+    _STAGE1_PATH = os.path.join(_STAGED_DIR, "stage1_medium.jsonl")
+    _STAGE2_PATH = os.path.join(_STAGED_DIR, "stage2_hard.jsonl")
     medium_ids = set()
     hard_ids = set()
     for path, id_set in [(_STAGE1_PATH, medium_ids), (_STAGE2_PATH, hard_ids)]:
@@ -304,7 +316,10 @@ async def _custom_eval_cvdp_async(
     diff_pass = {"easy": 0, "medium": 0, "hard": 0}
     diff_total = {"easy": 0, "medium": 0, "hard": 0}
 
-    EXTRACT_SCRIPT = "/workspace/S/shiwenxuan/cvdp_benchmark/scripts/extract_verilog_from_jsonl.py"
+    EXTRACT_SCRIPT = os.environ.get(
+        "CVDP_EXTRACT_SCRIPT",
+        os.path.join(CODEV_TEST_ROOT, "scripts/extract_verilog_from_jsonl.py"),
+    )
 
     def _parse_report(report_path):
         """Parse multi_sample_report.txt → {task_id: (passed: bool, cid: str)}."""

@@ -1,0 +1,238 @@
+# =============================================================================
+# Read source RTL and libraries
+# =============================================================================
+read_verilog -noblackbox -sv {file_path}
+chparam -list {top_module}
+stat
+read_liberty -setattr liberty_cell -lib {t_ech}
+
+# =============================================================================
+# Set hierarchy and flattening
+# =============================================================================
+hierarchy -top {top_module}
+tribuf
+scratchpad -set flatten.separator /
+synth -flatten -extra-map {base_dir}/files_needed/lcu_kogge_stone.v -top {top_module} -run begin:fine
+hierarchy -check -top {top_module}
+
+# =============================================================================
+# Process lowering and cleaning
+# =============================================================================
+proc
+proc_clean
+proc_rmdead
+proc_prune
+proc_init
+proc_arst
+proc_rom
+proc_mux
+proc_dlatch
+proc_dff
+proc_memwr
+proc_clean
+
+# =============================================================================
+# Basic optimization and flatten
+# =============================================================================
+opt_expr -keepdc
+flatten
+opt_expr
+opt_clean
+check
+
+# =============================================================================
+# General optimizations
+# =============================================================================
+opt -nodffe -nosdff
+opt_expr
+opt_merge -nomux
+opt_muxtree
+opt_reduce
+opt_merge
+opt_dff -nodffe -nosdff
+opt_clean
+opt_expr
+
+# =============================================================================
+# FSM extraction and mapping
+# =============================================================================
+fsm
+fsm_detect
+fsm_extract
+fsm_opt
+opt_clean
+fsm_opt
+fsm_recode
+fsm_info
+fsm_map
+opt
+opt_expr
+opt_merge -nomux
+opt_muxtree
+opt_reduce
+opt_merge
+opt_dff
+opt_clean
+opt_expr
+
+# =============================================================================
+# Arithmetic and peephole optimizations
+# =============================================================================
+wreduce
+peepopt
+opt_clean
+alumacc
+share
+opt
+opt_expr
+opt_merge -nomux
+opt_muxtree
+opt_reduce
+opt_merge
+opt_dff
+opt_clean
+opt_expr
+
+# =============================================================================
+# Memory optimizations
+# =============================================================================
+memory -nomap
+opt_mem
+opt_mem_priority
+opt_mem_feedback
+memory_bmux2rom
+memory_dff
+opt_clean
+memory_share
+opt_mem_widen
+opt_clean
+memory_collect
+opt_clean
+
+# =============================================================================
+# Additional synthesis and full optimization
+# =============================================================================
+synth -flatten -extra-map {base_dir}/files_needed/lcu_kogge_stone.v -top {top_module} -run fine:check
+opt -fast -full
+opt_expr -full
+opt_merge
+opt_dff
+opt_clean
+memory_map
+opt -full
+opt_expr -full
+opt_merge -nomux
+opt_muxtree
+opt_reduce -full
+opt_merge
+opt_share
+opt_dff
+opt_clean
+opt_expr -full
+
+# =============================================================================
+# Techmapping to target cells
+# =============================================================================
+techmap -map +/techmap.v -map {base_dir}/files_needed/lcu_kogge_stone.v
+opt -fast
+opt_expr
+opt_merge
+opt_dff
+opt_clean
+
+# =============================================================================
+# ABC optimization
+# =============================================================================
+abc -fast
+opt -fast
+opt_expr
+opt_merge
+opt_dff
+opt_clean
+
+# =============================================================================
+# Cleanups and formal removal
+# =============================================================================
+delete */t:$print
+chformal -remove
+hierarchy -top {top_module}
+opt -purge
+opt_expr
+opt_merge -nomux
+opt_muxtree
+opt_reduce
+opt_merge
+opt_dff
+opt_clean -purge
+opt_expr
+
+# =============================================================================
+# Specialized techmapping and logic extraction
+# =============================================================================
+techmap -map {base_dir}/files_needed/cells_tristatebuf.v
+techmap
+opt -fast -purge
+opt_expr
+opt_merge
+opt_dff
+opt_clean -purge
+
+extract_fa
+techmap -map {base_dir}/files_needed/cells_adders.v
+techmap
+opt -fast -purge
+opt_expr
+opt_merge
+opt_dff
+opt_clean -purge
+
+techmap -map {base_dir}/files_needed/cells_latch.v
+techmap
+opt -fast -purge
+opt_expr
+opt_merge
+opt_dff
+opt_clean -purge
+
+# =============================================================================
+# DFF mapping and legalization
+# =============================================================================
+rename -wire
+dfflibmap -dont_use OAI211_X1 -liberty {t_ech}
+dfflegalize -cell $_DFF_P_ 01 -cell $_DFF_PN0_ 01 -cell $_DFF_PN1_ 01 -cell $_DFFSR_PNN_ 01 t:$_DFF* t:$_SDFF*
+techmap
+opt -purge
+opt_expr
+opt_merge -nomux
+opt_muxtree
+opt_reduce
+opt_merge
+opt_dff
+opt_clean -purge
+opt_expr
+opt_muxtree
+opt_reduce
+opt_merge
+opt_dff
+opt_clean -purge
+opt_expr
+
+# =============================================================================
+# Final ABC with constraints
+# =============================================================================
+abc -constr {base_dir}/files_needed/sc_abc.constraints -liberty {t_ech} -dont_use OAI211_X1 -dont_use CLKBUF_X1 -dont_use CLKBUF_X2 -dont_use CLKBUF_X3
+
+# =============================================================================
+# Post-mapping cleanup and output
+# =============================================================================
+clean -purge
+setundef -zero
+splitnets
+clean -purge
+hilomap -singleton -locell LOGIC0_X1 Z -hicell LOGIC1_X1 Z
+insbuf -buf BUF_X1 A Z
+clean -purge
+echo off
+write_verilog -noexpr -nohex -nodec {file_path}g
+clean_zerowidth
+stat -liberty {t_ech}

@@ -1,0 +1,8 @@
+services:
+
+  01-new-tb:
+    image: __OSS_SIM_IMAGE__
+    volumes:
+      - ./src/:/src/:ro
+    env_file    : ./src/.env
+    command     : pytest -o cache_dir=/rundir/harness/.cache /src/test_runner.py -sv

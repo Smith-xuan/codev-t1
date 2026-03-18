@@ -1,0 +1,9 @@
+services:
+
+  direct:
+    build: .
+    volumes:
+      - ./src/:/src/:ro # Infrastructure location
+    env_file    : ./src/.env
+    command     : pytest -s --log-cli-level=INFO -o cache_dir=/rundir/harness/.cache /src/test_runner.py -v
+    # command     : python3 /src/test_runner.py

@@ -1,0 +1,42 @@
+# =============================================================================
+# Read Design and Libraries
+# =============================================================================
+read_verilog -noblackbox -sv {file_path}       # Read RTL source
+chparam -list {top_module}                     # Set top module parameters
+stat                                           # Initial design statistics
+read_liberty -setattr liberty_cell -lib {t_ech} # Load timing library
+
+# =============================================================================
+# Core Synthesis
+# =============================================================================
+synth -top {top_module} -flatten               # Flatten hierarchy and synthesize
+synth -top {top_module} -run fine:check        # Refine and check design
+
+# =============================================================================
+# ABC Optimization and Mapping
+# =============================================================================
+abc -fast -liberty {t_ech}                    # Fast logic optimization
+abc -constr {base_dir}/files_needed/sc_abc.constraints \  # Constrained ABC mapping
+    -liberty {t_ech} \
+    -dont_use OAI211_X1 \
+    -dont_use CLKBUF_X1 \
+    -dont_use CLKBUF_X2 \
+    -dont_use CLKBUF_X3
+
+# =============================================================================
+# Sequential Element Mapping
+# =============================================================================
+dfflibmap -liberty {t_ech}                    # Map flip-flops to library
+dfflegalize -cell $_DFF_P_ 01 \               # Legalize sequential cells
+           -cell $_DFF_PN0_ 01 \
+           -cell $_DFF_PN1_ 01 \
+           -cell $_DFFSR_PNN_ 01 \
+           t:$_DFF* t:$_SDFF*
+
+# =============================================================================
+# Final Output Generation
+# =============================================================================
+stat -liberty {t_ech}                         # Generate timing/area report
+write_verilog -noexpr -nohex -nodec {file_path}g # Write final netlist
+clean_zerowidth                               # Clean zero-width signals
+echo off                                      # Suppress redundant output

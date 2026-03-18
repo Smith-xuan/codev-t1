@@ -66,7 +66,11 @@ from slime.utils.types import Sample
 # Import the canonical Verilog extraction logic.
 # This is the same script called by custom_eval_cvdp.py so training and eval
 # use identical extraction rules.
-_EXTRACT_SCRIPT_DIR = "/workspace/S/shiwenxuan/cvdp_benchmark/scripts"
+_EXTRACT_SCRIPT_DIR = os.environ.get(
+    "CODEV_TEST_ROOT",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "codev_test"),
+)
+_EXTRACT_SCRIPT_DIR = os.path.join(_EXTRACT_SCRIPT_DIR, "scripts")
 if _EXTRACT_SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _EXTRACT_SCRIPT_DIR)
 from extract_verilog_from_jsonl import (  # noqa: E402
@@ -80,13 +84,16 @@ logger = logging.getLogger(__name__)
 # Constants
 # ────────────────────────────────────────────────────────────────────────────
 
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CVDP_TESTENV_ROOT = os.environ.get(
     "CVDP_TESTENV_ROOT",
-    "/workspace/S/shiwenxuan/codev_test/train_testenv",
+    os.path.join(_THIS_DIR, "codev_test", "train_testenv"),
 )
 
 # Additional binary directory that provides iverilog / vvp / yosys.
-EXTRA_BIN_PATH = "/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin"
+# Set CVDP_EXTRA_BIN_PATH in the launch script if these tools are not on PATH.
+EXTRA_BIN_PATH = os.environ.get("CVDP_EXTRA_BIN_PATH", "")
 
 # Explicit path to the pytest executable to use for CVDP testbench runs.
 # The Ray workers may run under a Python environment (e.g. a micromamba env)

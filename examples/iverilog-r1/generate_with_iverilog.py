@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 try:
     import sys
     import importlib.util
-    verl_path = "/nfs_global/projects/verl"
+    verl_path = os.environ.get("VERL_PATH", "/nfs_global/projects/verl")
     
     # Directly import the module file to avoid triggering verl/__init__.py
     # This prevents importing tensordict which may not be available in slime environment
@@ -146,7 +146,7 @@ def _get_iverilog_tmp_base() -> str:
     """Return the iverilog tmp base directory, creating it on first call."""
     global _IVERILOG_TMP_BASE
     if _IVERILOG_TMP_BASE is None:
-        base = os.getenv("IVERILOG_TMP_DIR", "/nfs_global/S/shiwenxuan/tmp/iverilog_tmp")
+        base = os.getenv("IVERILOG_TMP_DIR", "/tmp/iverilog_tmp")
         os.makedirs(base, exist_ok=True)
         _IVERILOG_TMP_BASE = base
     return _IVERILOG_TMP_BASE
@@ -489,7 +489,7 @@ async def _execute_iverilog_local(
         
         # Compile command: iverilog -Wall -Winfloop -Wno-timescale -g2012 -s testbench -o test.vvp design.sv
         # Use environment variable IVERILOG_PATH if set, otherwise use default path
-        default_iverilog_path = "/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/iverilog"
+        default_iverilog_path = shutil.which("iverilog") or "iverilog"
         iverilog_bin = os.getenv("IVERILOG_PATH", default_iverilog_path)
         compile_cmd = [
             iverilog_bin,
@@ -557,7 +557,7 @@ async def _execute_iverilog_local(
             return api_response, None
         
         # Run command: vvp -n test.vvp
-        vvp_bin = os.getenv("VVP_PATH", "/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/vvp")
+        vvp_bin = os.getenv("VVP_PATH", shutil.which("vvp") or "vvp")
         run_cmd = [vvp_bin, "-n", os.path.join(tmp_dir, "test.vvp")]
         
         async def _run():
