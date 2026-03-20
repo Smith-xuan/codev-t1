@@ -206,3 +206,5 @@ examples/iverilog-r1/report.txt
 # but evaluation results and per-run outputs are not)
 examples/iverilog-r1/codev_test/results/
 examples/iverilog-r1/codev_test/*/results/
+.brainpp/
+logs/brainpp/

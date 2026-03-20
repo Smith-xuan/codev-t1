@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 try:
     import sys
     import importlib.util
-    verl_path = os.environ.get("VERL_PATH", "/nfs_global/projects/verl")
+    verl_path = os.environ.get("VERL_PATH", "/mnt/i-zhangxiaoyun/verl")
     
     # Directly import the module file to avoid triggering verl/__init__.py
     # This prevents importing tensordict which may not be available in slime environment
@@ -1743,4 +1743,3 @@ async def reward_func(args, sample, **kwargs):
         "[iverilog-r1] Answer correct with acceptable but non-perfect format. Reward = 1.0"
     )
     return 1.0
-

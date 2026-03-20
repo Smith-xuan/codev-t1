@@ -1,293 +1,143 @@
-项目主要在/workspace/S/shiwenxuan/slime/examples/iverilog-r1下
+# codev-t1
 
-## 目录
+当前仓库默认使用 **BrainPP + `jlaunch`** 启动 `qwen3_8b_cvdp_testbench` 训练，不再依赖旧的 Slurm 启动方式。
 
-- [系统架构](#系统架构)
-- [一次性准备工作](#一次性准备工作)
-- [多节点启动方法](#多节点启动方法)
-- [环境变量配置说明](#环境变量配置说明)
-- [关键文件说明](#关键文件说明)
-- [训练流程概述](#训练流程概述)
+原始 slime 说明仍保留在 `README_ori.md`；这里仅说明现在这套可直接跑的 BrainPP 入口。
 
----
+## 入口文件
 
-## 系统架构
+- 配置文件：`examples/iverilog-r1/brainpp/qwen3_8b_cvdp_testbench.conf`
+- 容器内实验入口：`examples/iverilog-r1/brainpp/run_qwen3_8b_cvdp_testbench_brainpp.sh`
+- 一键提交脚本：`examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh`
+- 旧 Slurm 脚本：`examples/iverilog-r1/run_qwen3_8b_cvdp_testbench.sh`（仅保留参考）
 
-```
-2 节点 × 8 GPU（共 16 GPU）
-┌─────────────────────────────────────┐
-│  Node 0（Master）                   │
-│  - Ray Head                         │
-│  - SandboxFusion server             │
-│  - Megatron 训练（8 GPU, tp=8）     │
-└─────────────────────────────────────┘
-┌─────────────────────────────────────┐
-│  Node 1（Worker）                   │
-│  - Ray Worker                       │
-│  - SGLang 推理引擎（8 GPU, tp=8）   │
-└─────────────────────────────────────┘
-```
+## 现在的路径约定
 
-训练入口为 `train_async.py`（全异步模式），训练与推理运行在不同节点上，每 2 个训练步同步一次权重。
+这套入口改成了和 `verl/recipe/aec/rjob` 类似的“先同步到挂载存储，再从挂载存储同步到容器本地工作目录”的流程：
 
----
+1. 本机仓库：`/home/i-zhangxiaoyun/codev-t1`
+2. 提交前同步到挂载存储：`/mnt/i-zhangxiaoyun/codev-t1`
+3. 每个容器启动后再同步到本地工作目录：`/workspace/codev-t1`
 
-## 一次性准备工作
+这样做是因为 `jlaunch` / `rjob` 拉起镜像后相当于一台全新的机器，容器里默认没有你的代码目录；不能再假设像以前 Slurm 环境那样直接复用某台机器上的本地路径。
 
-### 1. 安装依赖
+## 默认存储位置
 
-先参考slime的build_conda.sh安装相关配置，安装好slime相关的环境
+- 起始模型：`/mnt/i-zhangxiaoyun/models/qwen3_8b/checkpoint-1270`
+- 训练 checkpoint 根目录：`/mnt/i-zhangxiaoyun/results/codev-t1/checkpoints/qwen3_8b_cvdp_testbench`
+- 实际保存目录：`/mnt/i-zhangxiaoyun/results/codev-t1/checkpoints/qwen3_8b_cvdp_testbench/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6`
+- W&B 离线目录：`/mnt/i-zhangxiaoyun/results/codev-t1/wandb/<RUN_NAME>`
+- 运行时共享状态：`/mnt/i-zhangxiaoyun/results/codev-t1/runtime/<RUN_NAME>`
+- 节点 bootstrap 日志：`/mnt/i-zhangxiaoyun/results/codev-t1/logs/<RUN_NAME>`
 
+如果你的模型不在默认位置，直接覆盖 `MODEL_PATH` 即可。
 
+## 训练拓扑
 
-然后安装eda_tools
-```bash
-cd examples/iverilog-r1/eda_tools
-pip install -e .
-```
+默认训练超参数与旧实验保持一致：
 
-确保以下工具可用（或通过 `IVERILOG_PATH`/`VVP_PATH` 指定路径）：
+- 总节点数：`2`
+- 每节点 GPU：`8`
+- actor：`1` 节点 × `8` GPU
+- rollout：`8` GPU
+- 训练入口：`train_async.py`
+- rollout 函数：`iverilog_async_rollout.generate_rollout_fully_async`
+- reward 函数：`cvdp_testbench_reward.reward_func`
+- eval 函数：`custom_eval_cvdp.custom_eval_cvdp`
 
-```bash
-which iverilog vvp yosys
-```
+## 依赖约定
 
-### 2. 安装 cocotb（用于 CVDP testbench 评估）
+默认镜像是 `hub.i.basemind.com/diversity/slime:0319`，并假设镜像内已可直接调用：
 
-CVDP testbench 评估依赖 pytest + cocotb。需要在一个单独的环境中安装，并通过 `CVDP_PYTEST_PATH` 指向该环境的 pytest：
+- `python3`
+- `ray`
+- `iverilog`
+- `vvp`
 
-```bash
-# 示例：在当前 slime 环境中安装
-pip install pytest cocotb
-```
+如果镜像里的工具不在 `PATH` 上，仍可按需覆盖：
 
-### 3. 准备预生成的测试环境（CVDP_TESTENV_ROOT）
+- `IVERILOG_PATH`
+- `VVP_PATH`
+- `YOSYS_PATH`
+- `CVDP_PYTEST_PATH`
+- `CVDP_EXTRA_BIN_PATH`
+- `ENTRY_ACTIVATE_CMD`
 
-如果使用仓库内的 `codev_test/train_testenv`（已预生成），无需此步骤。
+## 直接提交流程
 
-如需重新生成：
-
-```bash
-cd examples/iverilog-r1/codev_test
-python scripts/custom_test/cvdp_preprocess.py \
-    --jsonl benchmark/CVDP/data/raw/cvdp_v1.0.2_cid002_cid003.jsonl \
-    --outdir train_testenv
-```
-
-### 4. 准备模型检查点
-
-需要两份格式的检查点（HuggingFace 格式 + Megatron 格式），分别通过 `MODEL_PATH` 和 `CKPT_BASE` 指定。
-
-Megatron 格式转换命令：
+先确认配置：
 
 ```bash
-bash tools/convert_hf_to_megatron_qwen3_1.7b.sh  # 实际配置 8B 参数
+vim examples/iverilog-r1/brainpp/qwen3_8b_cvdp_testbench.conf
 ```
 
----
+最常需要确认的变量：
 
-## 多节点启动方法
+- `MODEL_PATH`
+- `CKPT_BASE`
+- `CKPT_SAVE_NAME`
+- `JLAUNCH_IMAGE`
+- `JLAUNCH_CHARGED_GROUP`
+- `JLAUNCH_POSITIVE_TAGS`
+- `JLAUNCH_CUSTOM_RESOURCES`
 
-启动脚本为 `examples/iverilog-r1/run_qwen3_8b_cvdp_testbench.sh`，在**每个节点**上各运行一次，通过 `NODE_RANK` 区分主节点（0）和工作节点（1+）。
-
-### 手动多节点启动
-
-**步骤一：在所有节点上 export 必要的环境变量**（见下方[环境变量配置说明](#环境变量配置说明)）
-
-**步骤二：在 Master 节点（Node 0）上运行：**
+然后直接提交：
 
 ```bash
-export NODE_RANK=0
-export MASTER_ADDR=<Master节点IP>
-export NUM_NODES=2
-bash /workspace/S/shiwenxuan/slime/examples/iverilog-r1/run_qwen3_8b_cvdp_testbench.sh
+RUN_NAME=qwen3_8b_cvdp_testbench_$(date +%Y%m%d_%H%M%S) \
+JLAUNCH_CHARGED_GROUP=step1o \
+JLAUNCH_POSITIVE_TAGS=H800 \
+NUM_NODES=2 \
+bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh
 ```
 
-**步骤三：在 Worker 节点（Node 1）上运行：**
+如果你的 H800 环境要求显式声明 RDMA 资源，可再加：
 
 ```bash
-export NODE_RANK=1
-export MASTER_ADDR=<Master节点IP>
-export NUM_NODES=2
-bash /workspace/S/shiwenxuan/slime/examples/iverilog-r1/run_qwen3_8b_cvdp_testbench.sh
+JLAUNCH_CUSTOM_RESOURCES=rdma/mlnx_shared=8,mellanox.com/mlnx_rdma=1
 ```
 
-Worker 节点脚本会加入 Ray 集群后进入等待状态，直到 Master 节点的训练任务结束后自动退出。
+提交脚本会自动完成：
 
-### 通过 Slurm 提交
+1. 把本地仓库同步到 `SYNC_REPO_ROOT`，默认即 `/mnt/i-zhangxiaoyun/codev-t1`
+2. 提交一个 head 容器
+3. 提交 `NUM_NODES - 1` 个 worker 副本
+4. head 把 Ray IP 写入 `HEAD_IP_FILE`
+5. worker 读取该文件并自动加入 Ray 集群
 
-如果集群支持 Slurm，可使用 `train_qwen3_8b_multinode.slurm`：
+## 常见覆盖项
+
+覆盖模型和输出目录：
 
 ```bash
-cd examples/iverilog-r1
-sbatch train_qwen3_8b_multinode.slurm
+MODEL_PATH=/mnt/i-zhangxiaoyun/your_model/checkpoint-1270 \
+CKPT_BASE=/mnt/i-zhangxiaoyun/results/codev-t1/checkpoints/my_exp \
+CKPT_SAVE_NAME=run1 \
+bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh
 ```
 
----
+覆盖挂载：
 
-## 环境变量配置说明
-
-以下变量在 `run_qwen3_8b_cvdp_testbench.sh` 中均有默认值，可通过 `export` 或在脚本顶部修改来覆盖。**建议在启动前通过 `export` 设置，以避免修改脚本本身。**
-
-### 必须配置（无合理默认值）
-
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `MODEL_PATH` | HuggingFace 格式模型检查点路径 | `/path/to/qwen3-8b-sft/checkpoint-1270` |
-| `CKPT_BASE` | Megatron 格式检查点基础目录（`--ref-load` 和 `--load`/`--save` 的父目录） | `/path/to/checkpoint_torch_dist` |
-| `MASTER_ADDR` | Master 节点 IP 地址（非 Slurm 环境必须指定） | `10.21.0.3` |
-
-### 工具路径（auto-detect，通常无需设置）
-
-脚本会通过 `which` 自动查找工具路径，仅在工具不在 `PATH` 上时才需手动指定。
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `IVERILOG_PATH` | iverilog 可执行文件路径 | `$(which iverilog)` |
-| `VVP_PATH` | vvp 可执行文件路径 | `$(which vvp)` |
-| `YOSYS_PATH` | yosys 可执行文件路径（功能等价性验证用） | `$(which yosys)` |
-| `CVDP_EXTRA_BIN_PATH` | 追加到 Ray worker `PATH` 的额外 bin 目录（当工具只在某个 conda 环境的 bin 下时使用） | `""` (不追加) |
-
-**示例**（工具在 conda 环境中，不在系统 PATH）：
 ```bash
-export CVDP_EXTRA_BIN_PATH=/opt/miniconda3/envs/eda/bin
+JLAUNCH_MOUNT_SPECS="juicefs+s3://oss.i.shaipower.com/i-zhangxiaoyun:/mnt/i-zhangxiaoyun" \
+bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh
 ```
 
-### 数据路径（默认使用仓库内数据）
+如确有额外 volume 需求，可设置：
 
-| 变量 | 说明 | 默认值（相对仓库目录） |
-|------|------|----------------------|
-| `DATA_PATH` | 训练数据目录（含 `train.parquet`，172 道 CVDP 题目） | `examples/iverilog-r1/data/cvdp_testbench_172` |
-| `CVDP_TESTENV_ROOT` | 预生成的 CVDP testbench 环境目录 | `examples/iverilog-r1/codev_test/train_testenv` |
-| `CODEV_TEST_ROOT` | codev_test 根目录（含 benchmark JSONL、测试脚本等） | `examples/iverilog-r1/codev_test` |
-| `IVERILOG_TMP_DIR` | iverilog 仿真临时文件目录（**应指向本地磁盘，避免 NFS**） | `/tmp/iverilog_tmp` |
-
-**注意**：`IVERILOG_TMP_DIR` 必须是本地磁盘路径，NFS 路径会导致 I/O 卡死。
-
-### Python 依赖路径（Ray worker 的 PYTHONPATH）
-
-Ray worker 进程需要能 import Megatron-LM、SGLang 等库，通过以下变量配置（这个要看你的相关库在哪）：
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `MEGATRON_LM_PATH` | Megatron-LM 源码目录 | `/workspace/S/shiwenxuan/Megatron-LM` |
-| `SGLANG_GATEWAY_PATH` | SGLang model-gateway Python bindings 目录 | `/workspace/S/shiwenxuan/sglang/sgl-model-gateway/bindings/python` |
-| `SGLANG_PYTHON_PATH` | SGLang Python 目录 | `/workspace/S/shiwenxuan/sglang/python` |
-| `VERL_PATH` | verl 源码目录（用于导入 SandboxFusion 工具函数， 现在默认是不用sandboxfusion的，因为我发现会有很多不知名的执行错误现象，默认是做了各种限制的本地命令行执行，因此这里可以随便填一个路径） | `/workspace/S/shiwenxuan/verl` |
-
-### 评估相关
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `CVDP_PYTEST_PATH` | 含 cocotb 的 pytest 可执行文件路径（Ray worker 运行 testbench 时使用） | `$(which pytest)` |
-
-**注意**：如果 slime 训练环境中没有安装 cocotb，需要指向一个安装了 cocotb 的独立环境的 pytest：
 ```bash
-export CVDP_PYTEST_PATH=/opt/miniconda3/envs/cocotb-env/bin/pytest
+JLAUNCH_EXTRA_VOLUMES="/mnt:/mnt"
 ```
 
-### SandboxFusion
+## 这次改动去掉了什么
 
-SandboxFusion 用于在 `local_iverilog` 方式以外提供代码沙箱执行服务（当前默认使用本地 iverilog，SandboxFusion 为备选）。
+- 不再依赖 `SLURM_JOB_ID`、`scontrol`、`sbatch`
+- 不再默认要求手工提供 `iverilog` / `vvp` / `yosys` 绝对路径
+- 不再依赖旧的 Sandbox / `ulimit` workaround
+- 不再假设代码已经存在于容器里
 
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `SANDBOX_DIR` | SandboxFusion 服务目录 | `/workspace/S/shiwenxuan/verl/SandboxFusion` |
-| `SANDBOX_PORT` | SandboxFusion 服务端口 | `8181` |
+## 备注
 
-### 网络与节点配置
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `NUM_NODES` | 总节点数 | `2` |
-| `NODE_RANK` | 当前节点编号（Master=0，Worker=1,2,...） | `0` |
-| `MASTER_PORT` | Ray GCS 端口（同时用于计算其他 Ray 端口） | `59553` |
-| `NETWORK_INTERFACE` | 节点间通信使用的网卡名（**多节点必须正确配置，否则 NCCL 通信失败**） | 自动检测 InfiniBand/eth0 |
-
-**网卡配置说明**：如果自动检测不正确，手动指定：
-```bash
-export NETWORK_INTERFACE=eth0   # 或 ib0、bond0 等
-```
-
-### W&B 日志
-
-| 变量 | 说明 | 默认值 |
-|------|------|--------|
-| `WANDB_API_KEY` | W&B API Key（设置后自动启用 W&B 日志） | 未设置（不传 key） |
-
-### 其他运行时路径
-
-以下路径在脚本中直接硬编码，如需修改请编辑脚本：
-
-| 变量/路径 | 位置 | 说明 |
-|----------|------|------|
-| `EXEC_ROOT_DIR` | 脚本约第 86 行 | Python/triton 临时文件根目录，应指向节点本地可写路径 |
-| `RAY_SPILL_DIR` | 脚本约第 113 行 | Ray object spill 目录，应指向 NFS 共享路径（跨节点） |
-| micromamba 路径 | 脚本约第 42-52 行 | conda/micromamba 初始化路径，按实际环境修改 |
-
----
-
-## 关键文件说明
-
-| 文件 | 职责 |
-|------|------|
-| `run_qwen3_8b_cvdp_testbench.sh` | 主启动脚本，管理环境初始化、Ray 集群、训练提交 |
-| `generate_with_iverilog.py` | 多轮工具调用生成函数（`generate`）+ 自动生成testbench的奖励函数（`reward_func`，目前过拟合实验阶段用不到） |
-| `cvdp_testbench_reward.py` | 基于官方 CVDP testbench 的奖励函数（当前过拟合实验用cvdp benchmark当训练集时使用其作为reward_func） |
-| `custom_eval_cvdp.py` | CVDP benchmark 评估函数（每隔 N 步调用一次，动态筛选训练课程） |
-| `verilog_utils.py` | Verilog 代码提取、清洗、格式检查工具函数 |
-| `codev_test/` | CVDP benchmark 数据、测试脚本、预生成 testbench 环境 |
-| `data/cvdp_testbench_172/` | 172 道 CVDP 训练题目（parquet 格式） |
-| `data/eval_parquet/` | 评估用 parquet 数据 |
-| `eda_tools/` | EDA 工具函数库（功能等价性验证，yosys/iverilog， 过拟合阶段用不到，但后续正式训练要用到） |
-
----
-
-## 训练流程概述
-
-### 奖励信号
-
-过拟合实验阶段训练奖励来自官方 CVDP testbench：模型生成的 Verilog 代码通过 pytest + cocotb + iverilog 运行 testbench，全部测试用例通过则奖励 1.0，否则 0.0。
-
-训练中的 iverilog 工具调用奖励（`generate_with_iverilog.reward_func`）用于后续的训练中没有testbench的大规模数据进行等价性验证给奖励
-
-### 动态课程（Dynamic Curriculum）
-
-每次 eval 后，根据 3 次采样结果自动筛选训练数据：
-
-- 3 次采样中通过次数为 **1 或 2** 的题目被认为是当前模型的"中等难度"题目，纳入下一轮训练
-- 全通过（3/3）的题目太简单，全失败（0/3）的题目太难，都不纳入训练
-- 首次训练（第一次 eval 之后）即启用动态筛选
-
-### GRPO 训练配置
-
-- 每个 prompt 生成 8 个样本，用 GRPO 计算组内相对优势
-- 奖励方差为零的组（全通或全错）被过滤掉，不参与训练
-- 每 2 个训练步将更新后的权重同步回 SGLang 推理引擎
-
-### 评估
-
-- 每 20 个 rollout 步运行一次 CVDP benchmark 评估（172 题，每题 3 次采样）
-- 指标：`pass@1`（平均通过率）、`pass@3`（至少 1 次通过的题目比例）
-- 评估结果同时用于更新动态课程筛选列表
-
----
-
-## 常见问题
-
-**Q: iverilog/vvp 命令找不到**
-
-设置 `CVDP_EXTRA_BIN_PATH` 指向包含这些工具的目录，或直接设置 `IVERILOG_PATH` 和 `VVP_PATH`。
-
-**Q: pytest 运行 testbench 报 `ModuleNotFoundError: cocotb`**
-
-`CVDP_PYTEST_PATH` 指向的 pytest 所在的 Python 环境缺少 cocotb。请安装 cocotb 或指向正确环境的 pytest。
-
-**Q: 多节点 NCCL 连接失败**
-
-手动设置 `NETWORK_INTERFACE` 为节点间互通的网卡名（如 `eth0`、`ib0`）。
-
-**Q: /tmp 空间不足导致 DeepGEMM 编译 OOM**
-
-脚本已设置 `SGLANG_DISABLE_DEEPGEMM=1`，这是预期行为，会损失约 10% 推理性能但可避免 OOM。
-
+- `jlaunch` 本质上就是 `brainctl rjob launch`
+- 当前运行方式是“本机仓库 → 挂载存储 → 容器本地工作目录”
+- 如果后续切换其他 BrainPP 提交流程，核心训练入口仍然是 `examples/iverilog-r1/brainpp/run_qwen3_8b_cvdp_testbench_brainpp.sh`

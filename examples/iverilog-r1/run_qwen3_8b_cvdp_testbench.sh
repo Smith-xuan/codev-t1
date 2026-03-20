@@ -34,9 +34,9 @@ HOST_HASH=$(hostname | md5sum | cut -c1-6)
 #    MAMBA_EXE      : micromamba binary (leave unset to skip micromamba init)
 #    MAMBA_ROOT_PREFIX : micromamba root prefix
 # ---------------------------------------------------------------------------
-MAMBA_EXE="${MAMBA_EXE:-/workspace/S/shiwenxuan/bin/micromamba}"
-MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/nfs_global/S/shiwenxuan/micromamba}"
-CONDA_ENV_PATH="${CONDA_ENV_PATH:-/workspace/S/shiwenxuan/envs/slime}"
+MAMBA_EXE="${MAMBA_EXE:-$(command -v micromamba || true)}"
+MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/mnt/i-zhangxiaoyun/micromamba}"
+CONDA_ENV_PATH="${CONDA_ENV_PATH:-/mnt/i-zhangxiaoyun/envs/slime}"
 
 # ---------------------------------------------------------------------------
 # 2. Tmp / spill directories
@@ -45,8 +45,8 @@ CONDA_ENV_PATH="${CONDA_ENV_PATH:-/workspace/S/shiwenxuan/envs/slime}"
 #    RAY_SPILL_BASE : base for Ray object-spill dir
 #                     should be on a shared filesystem so all nodes can access it
 # ---------------------------------------------------------------------------
-EXEC_TMP_BASE="${EXEC_TMP_BASE:-/workspace/S/shiwenxuan/tmp}"
-RAY_SPILL_BASE="${RAY_SPILL_BASE:-/nfs_global/S/shiwenxuan/tmp}"
+EXEC_TMP_BASE="${EXEC_TMP_BASE:-/tmp/codev-t1}"
+RAY_SPILL_BASE="${RAY_SPILL_BASE:-/mnt/i-zhangxiaoyun/results/codev-t1/ray_spill}"
 
 # ---------------------------------------------------------------------------
 # 3. Multi-node cluster settings
@@ -73,9 +73,9 @@ SGLANG_ROUTER_PORT="${SGLANG_ROUTER_PORT:-3001}"
 #    CVDP_EXTRA_BIN_PATH : extra directory appended to PATH in Ray workers
 #                          (useful when tools live in a conda env bin dir)
 # ---------------------------------------------------------------------------
-IVERILOG_PATH="${IVERILOG_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/iverilog}"
-VVP_PATH="${VVP_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/vvp}"
-YOSYS_PATH="${YOSYS_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/yosys}"
+IVERILOG_PATH="${IVERILOG_PATH:-$(command -v iverilog || printf 'iverilog')}"
+VVP_PATH="${VVP_PATH:-$(command -v vvp || printf 'vvp')}"
+YOSYS_PATH="${YOSYS_PATH:-$(command -v yosys || printf 'yosys')}"
 CVDP_EXTRA_BIN_PATH="${CVDP_EXTRA_BIN_PATH:-}"
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ CVDP_EXTRA_BIN_PATH="${CVDP_EXTRA_BIN_PATH:-}"
 #    is not "local_iverilog"; safe to leave pointing to a non-existent path
 #    when running in local_iverilog mode)
 # ---------------------------------------------------------------------------
-SANDBOX_DIR="${SANDBOX_DIR:-/workspace/S/shiwenxuan/verl/SandboxFusion}"
+SANDBOX_DIR="${SANDBOX_DIR:-/mnt/i-zhangxiaoyun/verl/SandboxFusion}"
 SANDBOX_HOST="${SANDBOX_HOST:-0.0.0.0}"
 
 # ---------------------------------------------------------------------------
@@ -104,18 +104,18 @@ IVERILOG_TMP_DIR="${IVERILOG_TMP_DIR:-/tmp/iverilog_tmp}"
 #    CKPT_BASE    : Megatron format checkpoint directory (for --ref-load)
 #    CKPT_SAVE_NAME: subdirectory under CKPT_BASE used for --load and --save
 # ---------------------------------------------------------------------------
-MODEL_PATH="${MODEL_PATH:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270}"
-CKPT_BASE="${CKPT_BASE:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist}"
+MODEL_PATH="${MODEL_PATH:-/mnt/i-zhangxiaoyun/models/qwen3_8b/checkpoint-1270}"
+CKPT_BASE="${CKPT_BASE:-/mnt/i-zhangxiaoyun/results/codev-t1/checkpoints/qwen3_8b_cvdp_testbench}"
 CKPT_SAVE_NAME="${CKPT_SAVE_NAME:-dynamic_curriculum_kl0.0_update2_eval3_lr2e-6}"
 
 # ---------------------------------------------------------------------------
 # 9. Python dependency paths injected into Ray workers via PYTHONPATH
 #    These must be visible on all nodes (typically NFS-mounted).
 # ---------------------------------------------------------------------------
-MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/workspace/S/shiwenxuan/Megatron-LM}"
-SGLANG_GATEWAY_PATH="${SGLANG_GATEWAY_PATH:-/workspace/S/shiwenxuan/sglang/sgl-model-gateway/bindings/python}"
-SGLANG_PYTHON_PATH="${SGLANG_PYTHON_PATH:-/workspace/S/shiwenxuan/sglang/python}"
-VERL_PATH="${VERL_PATH:-/workspace/S/shiwenxuan/verl}"
+MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/workspace/Megatron-LM}"
+SGLANG_GATEWAY_PATH="${SGLANG_GATEWAY_PATH:-/workspace/sglang/sgl-model-gateway/bindings/python}"
+SGLANG_PYTHON_PATH="${SGLANG_PYTHON_PATH:-/workspace/sglang/python}"
+VERL_PATH="${VERL_PATH:-/mnt/i-zhangxiaoyun/verl}"
 
 # ---------------------------------------------------------------------------
 # 10. pytest for CVDP testbench evaluation
