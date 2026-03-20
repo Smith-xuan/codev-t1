@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-RUN_NAME="${RUN_NAME:-qwen3_8b_cvdp_testbench_$(date +%Y%m%d_%H%M%S)}"
+RUN_NAME="${RUN_NAME:-qwen3-8b-cvdp-$(date +%d%H%M)}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/qwen3_8b_cvdp_testbench.conf"
