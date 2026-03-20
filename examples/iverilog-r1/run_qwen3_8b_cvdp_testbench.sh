@@ -2,22 +2,9 @@
 # =============================================================================
 # Fully-Async Multi-Node Training Script for CVDP Testbench Reward with Qwen3-8B
 # =============================================================================
-#
-# Key differences from run_qwen3_8b_multinode_megatron.sh:
-#   1. Entry point: train_async.py  (NOT train.py)
-#   2. NO --colocate flag: training GPUs and rollout GPUs are separate pools
-#   3. GPU split on 2 nodes × 8 GPUs = 16 GPUs total:
-#        - Node 0: actor training  → --actor-num-nodes 1 --actor-num-gpus-per-node 8
-#        - Node 1: SGLang rollout  → --rollout-num-gpus 8
-#   4. Context-parallel removed (cp=2 needs 16 training GPUs; we only have 8)
-#   5. --rollout-function-path iverilog_async_rollout.generate_rollout_fully_async
-#   6. --partial-rollout + --mask-offpolicy-in-partial-rollout
-#   7. --update-weights-interval 2  (sync SGLang weights every 2 training steps)
-#
-# CVDP-specific changes vs run_qwen3_8b_multinode_megatron_async.sh:
-#   - DATA_PATH: cvdp_testbench_172  (172 CVDP benchmark questions)
-#   - --custom-rm-path: cvdp_testbench_reward.reward_func  (testbench-based reward)
-#   - CVDP_TESTENV_ROOT: pre-generated test environments directory
+# All site-specific paths and settings are in the USER CONFIGURATION section
+# below.  Override any variable by exporting it before running this script,
+# or by editing the defaults in that section.
 # =============================================================================
 
 set -e
@@ -25,46 +12,180 @@ set -e
 # Source bashrc
 . ~/.bashrc 2>/dev/null || true
 
-# Increase file descriptor limit
+# ---------------------------------------------------------------------------
+# Resolve script/repo directories first — needed for relative path defaults.
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+SLIME_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
+IVERILOG_R1_DIR="${SCRIPT_DIR}"
+
+# Compute JOB_ID early — used in tmp-dir defaults below.
+JOB_ID=${SLURM_JOB_ID:-manual}
+JOB_ID_SHORT=$(echo "${JOB_ID}" | cut -c1-6)
+HOST_HASH=$(hostname | md5sum | cut -c1-6)
+
+# =============================================================================
+# USER CONFIGURATION — edit defaults here or export variables before running
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 1. Conda / Python environment
+#    CONDA_ENV_PATH : path to the activated conda/micromamba env
+#    MAMBA_EXE      : micromamba binary (leave unset to skip micromamba init)
+#    MAMBA_ROOT_PREFIX : micromamba root prefix
+# ---------------------------------------------------------------------------
+MAMBA_EXE="${MAMBA_EXE:-/workspace/S/shiwenxuan/bin/micromamba}"
+MAMBA_ROOT_PREFIX="${MAMBA_ROOT_PREFIX:-/nfs_global/S/shiwenxuan/micromamba}"
+CONDA_ENV_PATH="${CONDA_ENV_PATH:-/workspace/S/shiwenxuan/envs/slime}"
+
+# ---------------------------------------------------------------------------
+# 2. Tmp / spill directories
+#    EXEC_TMP_BASE  : base for per-node Python/Triton/SGLang tmp dirs
+#                     must be a fast local (non-NFS) path visible on every node
+#    RAY_SPILL_BASE : base for Ray object-spill dir
+#                     should be on a shared filesystem so all nodes can access it
+# ---------------------------------------------------------------------------
+EXEC_TMP_BASE="${EXEC_TMP_BASE:-/workspace/S/shiwenxuan/tmp}"
+RAY_SPILL_BASE="${RAY_SPILL_BASE:-/nfs_global/S/shiwenxuan/tmp}"
+
+# ---------------------------------------------------------------------------
+# 3. Multi-node cluster settings
+#    NODE_RANK  : 0 = master/head node, 1+ = worker nodes
+#    MASTER_ADDR: IP or hostname of the master node
+#    NUM_NODES  : total number of nodes
+#    GPUS_PER_NODE : GPUs available on each node
+# ---------------------------------------------------------------------------
+NODE_RANK="${NODE_RANK:-0}"
+MASTER_ADDR="${MASTER_ADDR:-10.21.0.3}"
+NUM_NODES="${NUM_NODES:-2}"
+GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
+
+# ---------------------------------------------------------------------------
+# 4. Ports
+# ---------------------------------------------------------------------------
+MASTER_PORT="${MASTER_PORT:-59553}"
+SANDBOX_PORT="${SANDBOX_PORT:-8181}"
+SGLANG_ROUTER_PORT="${SGLANG_ROUTER_PORT:-3001}"
+
+# ---------------------------------------------------------------------------
+# 5. EDA tool binaries
+#    Set to absolute paths if the tools are not on PATH in the worker env.
+#    CVDP_EXTRA_BIN_PATH : extra directory appended to PATH in Ray workers
+#                          (useful when tools live in a conda env bin dir)
+# ---------------------------------------------------------------------------
+IVERILOG_PATH="${IVERILOG_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/iverilog}"
+VVP_PATH="${VVP_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/vvp}"
+YOSYS_PATH="${YOSYS_PATH:-/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/yosys}"
+CVDP_EXTRA_BIN_PATH="${CVDP_EXTRA_BIN_PATH:-}"
+
+# ---------------------------------------------------------------------------
+# 6. SandboxFusion server (used as fallback when IVERILOG_EXECUTION_METHOD
+#    is not "local_iverilog"; safe to leave pointing to a non-existent path
+#    when running in local_iverilog mode)
+# ---------------------------------------------------------------------------
+SANDBOX_DIR="${SANDBOX_DIR:-/workspace/S/shiwenxuan/verl/SandboxFusion}"
+SANDBOX_HOST="${SANDBOX_HOST:-0.0.0.0}"
+
+# ---------------------------------------------------------------------------
+# 7. Data paths
+#    DATA_PATH        : training data directory (must contain train.parquet)
+#    CODEV_TEST_ROOT  : codev_test root (benchmark JSONL, test scripts)
+#    CVDP_TESTENV_ROOT: pre-generated testbench environments
+#    IVERILOG_TMP_DIR : iverilog simulation tmp dir — MUST be local disk, not NFS
+# ---------------------------------------------------------------------------
+DATA_PATH="${DATA_PATH:-${IVERILOG_R1_DIR}/data/cvdp_testbench_172}"
+CODEV_TEST_ROOT="${CODEV_TEST_ROOT:-${IVERILOG_R1_DIR}/codev_test}"
+CVDP_TESTENV_ROOT="${CVDP_TESTENV_ROOT:-${IVERILOG_R1_DIR}/codev_test/train_testenv}"
+IVERILOG_TMP_DIR="${IVERILOG_TMP_DIR:-/tmp/iverilog_tmp}"
+
+# ---------------------------------------------------------------------------
+# 8. Model checkpoints
+#    MODEL_PATH   : HuggingFace format checkpoint (for --hf-checkpoint)
+#    CKPT_BASE    : Megatron format checkpoint directory (for --ref-load)
+#    CKPT_SAVE_NAME: subdirectory under CKPT_BASE used for --load and --save
+# ---------------------------------------------------------------------------
+MODEL_PATH="${MODEL_PATH:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270}"
+CKPT_BASE="${CKPT_BASE:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist}"
+CKPT_SAVE_NAME="${CKPT_SAVE_NAME:-dynamic_curriculum_kl0.0_update2_eval3_lr2e-6}"
+
+# ---------------------------------------------------------------------------
+# 9. Python dependency paths injected into Ray workers via PYTHONPATH
+#    These must be visible on all nodes (typically NFS-mounted).
+# ---------------------------------------------------------------------------
+MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/workspace/S/shiwenxuan/Megatron-LM}"
+SGLANG_GATEWAY_PATH="${SGLANG_GATEWAY_PATH:-/workspace/S/shiwenxuan/sglang/sgl-model-gateway/bindings/python}"
+SGLANG_PYTHON_PATH="${SGLANG_PYTHON_PATH:-/workspace/S/shiwenxuan/sglang/python}"
+VERL_PATH="${VERL_PATH:-/workspace/S/shiwenxuan/verl}"
+
+# ---------------------------------------------------------------------------
+# 10. pytest for CVDP testbench evaluation
+#     Leave empty to use sys.executable -m pytest (the current Python env).
+#     Set to an absolute path only when pytest/cocotb live in a *different*
+#     Python environment from the one running the reward function.
+# ---------------------------------------------------------------------------
+CVDP_PYTEST_PATH="${CVDP_PYTEST_PATH:-}"
+
+# ---------------------------------------------------------------------------
+# 11. W&B — set WANDB_API_KEY in env to enable online logging
+# ---------------------------------------------------------------------------
+WANDB_PROJECT="${WANDB_PROJECT:-slime-async-cvdp-train}"
+WANDB_GROUP="${WANDB_GROUP:-cvdp_testbench_reward_qwen3_8b}"
+WANDB_MODE="${WANDB_MODE:-offline}"
+
+# =============================================================================
+# END OF USER CONFIGURATION
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Derived paths (computed from configurable bases above)
+# ---------------------------------------------------------------------------
+EXEC_ROOT_DIR="${EXEC_ROOT_DIR:-${EXEC_TMP_BASE}/job_${JOB_ID_SHORT}}"
+NODE_EXEC_TMP_DIR="${EXEC_ROOT_DIR}/${HOST_HASH}"
+RAY_SPILL_DIR="${RAY_SPILL_DIR:-${RAY_SPILL_BASE}/ray_spill_${JOB_ID_SHORT}}"
+TRAIN_FILE="train.parquet"
+RAY_WORKER_PYTHONPATH="${SGLANG_GATEWAY_PATH}:${MEGATRON_LM_PATH}:${SCRIPT_DIR}:${SLIME_ROOT}:${SGLANG_PYTHON_PATH}:${VERL_PATH}:${IVERILOG_R1_DIR}/eda_tools"
+
+# ---------------------------------------------------------------------------
+# System limits
+# ---------------------------------------------------------------------------
 ulimit -n 65536 2>/dev/null || true
 echo "Current ulimit -n: $(ulimit -n)"
-
 ulimit -l unlimited
 ulimit -v unlimited
 ulimit -n 65535
 ulimit -u 4125556
 
-# Initialize conda/micromamba
+# ---------------------------------------------------------------------------
+# Conda / micromamba activation
+# ---------------------------------------------------------------------------
 if command -v conda >/dev/null 2>&1; then
     eval "$(conda shell.bash hook 2>/dev/null)" || true
 fi
 
-if [ -f "/workspace/S/shiwenxuan/bin/micromamba" ]; then
-    export MAMBA_EXE='/workspace/S/shiwenxuan/bin/micromamba'
-    export MAMBA_ROOT_PREFIX='/nfs_global/S/shiwenxuan/micromamba'
+if [ -f "${MAMBA_EXE}" ]; then
+    export MAMBA_EXE
+    export MAMBA_ROOT_PREFIX
     eval "$($MAMBA_EXE shell hook --shell bash --root-prefix $MAMBA_ROOT_PREFIX 2>/dev/null)" || true
 
-    if [ -d "/workspace/S/shiwenxuan/envs/slime" ]; then
-        micromamba activate /workspace/S/shiwenxuan/envs/slime
+    if [ -d "${CONDA_ENV_PATH}" ]; then
+        micromamba activate "${CONDA_ENV_PATH}"
     else
         micromamba activate slime || true
     fi
 fi
 
-# === Fix GLIBCXX Version Mismatch ===
-export LD_LIBRARY_PATH="${CONDA_PREFIX:-/workspace/S/shiwenxuan/envs/slime}/lib:${LD_LIBRARY_PATH}"
-echo "Updated LD_LIBRARY_PATH to include Conda lib: ${LD_LIBRARY_PATH}"
+# Fix GLIBCXX version mismatch
+export LD_LIBRARY_PATH="${CONDA_PREFIX:-${CONDA_ENV_PATH}}/lib:${LD_LIBRARY_PATH}"
+echo "Updated LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"
 
 export PYTHONUNBUFFERED=1
 if [ -t 1 ]; then
     export PYTHONIOENCODING=utf-8
 fi
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-SLIME_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
-IVERILOG_R1_DIR="${SCRIPT_DIR}"
-
-# === Disable HTTP proxy ===
+# ---------------------------------------------------------------------------
+# Disable HTTP proxy (Ray is sensitive to proxy settings)
+# ---------------------------------------------------------------------------
 unset http_proxy HTTP_PROXY https_proxy HTTPS_PROXY all_proxy ALL_PROXY ftp_proxy FTP_PROXY
 export no_proxy="127.0.0.1,localhost,0.0.0.0,::1,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12,*.local,*.future.cn"
 export NO_PROXY="$no_proxy"
@@ -78,14 +199,9 @@ echo "=== Checking Shared Memory ==="
 df -h /dev/shm
 echo "=============================="
 
-JOB_ID=${SLURM_JOB_ID:-manual}
-JOB_ID_SHORT=$(echo "${JOB_ID}" | cut -c1-6)
-HOST_HASH=$(hostname | md5sum | cut -c1-6)
-
-# 1. Python/Exec Tmp Dir
-EXEC_ROOT_DIR="/workspace/S/shiwenxuan/tmp/job_${JOB_ID_SHORT}"
-NODE_EXEC_TMP_DIR="${EXEC_ROOT_DIR}/${HOST_HASH}"
-
+# ---------------------------------------------------------------------------
+# Tmp directories
+# ---------------------------------------------------------------------------
 mkdir -p "$EXEC_ROOT_DIR"
 mkdir -p "$NODE_EXEC_TMP_DIR"
 
@@ -104,26 +220,29 @@ export TORCH_EXTENSIONS_DIR="$NODE_EXEC_TMP_DIR/torch_extensions"
 export SGLANG_TMPDIR="$NODE_EXEC_TMP_DIR/sglang_tmp"
 mkdir -p $TORCH_EXTENSIONS_DIR $TRITON_CACHE_DIR $SGLANG_TMPDIR
 
-# 2. Ray Tmp Dir (Local)
+# Ray tmp (local disk — avoid NFS)
 RAY_TMP_DIR="/tmp/r_${JOB_ID_SHORT}"
 rm -rf $RAY_TMP_DIR
 mkdir -p $RAY_TMP_DIR
 export RAY_TMPDIR=$RAY_TMP_DIR
 
-# 3. Ray Spill Dir  (per-job path so it is cleaned up on exit and does not accumulate)
-RAY_SPILL_DIR="/nfs_global/S/shiwenxuan/tmp/ray_spill_${JOB_ID_SHORT}"
-mkdir -p $RAY_SPILL_DIR
-
 echo "Node Hostname: $(hostname)"
 echo "Python TMP: $NODE_EXEC_TMP_DIR"
 echo "Ray TMP:    $RAY_TMP_DIR"
+echo "=== Training dataset: ${DATA_PATH}/${TRAIN_FILE} (dynamic curriculum) ==="
+echo "=== CVDP_TESTENV_ROOT: ${CVDP_TESTENV_ROOT} ==="
+echo "=== Model: ${MODEL_PATH} ==="
+echo "=== Checkpoint save: ${CKPT_BASE}/${CKPT_SAVE_NAME} ==="
 
-# === Disable DeepGEMM ===
+# ---------------------------------------------------------------------------
+# SGLang / DeepGEMM
+# ---------------------------------------------------------------------------
 export SGLANG_DISABLE_DEEPGEMM=1
 export SGLANG_DISABLE_FLASHINFER_SAMPLING=1
 
-# === Port Configuration ===
-MASTER_PORT=${MASTER_PORT:-59553}
+# ---------------------------------------------------------------------------
+# Port derivation from MASTER_PORT
+# ---------------------------------------------------------------------------
 RAY_GCS_PORT=$MASTER_PORT
 
 if [ "$MASTER_PORT" -gt 10000 ]; then
@@ -144,10 +263,9 @@ else
 fi
 RAY_DASHBOARD_PORT=$DASHBOARD_PORT
 
-SANDBOX_PORT=${SANDBOX_PORT:-8181}
-SGLANG_ROUTER_PORT=${SGLANG_ROUTER_PORT:-3001}
-
-# === Network Interface Detection ===
+# ---------------------------------------------------------------------------
+# Network interface detection
+# ---------------------------------------------------------------------------
 get_valid_iface() {
     if command -v ibdev2netdev >/dev/null 2>&1; then
         IB_IF=$(ibdev2netdev | grep Up | grep ib | head -1 | awk '{print $5}')
@@ -182,38 +300,31 @@ export NCCL_SOCKET_IFNAME=$NETWORK_INTERFACE
 export GLOO_SOCKET_IFNAME=$NETWORK_INTERFACE
 export TP_SOCKET_IFNAME=$NETWORK_INTERFACE
 
-# === Node Configuration ===
+# ---------------------------------------------------------------------------
+# Node configuration (override by SLURM if available)
+# ---------------------------------------------------------------------------
 if [ ! -z "$SLURM_JOB_NODELIST" ]; then
     echo "Running under SLURM environment"
     NODE_LIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
     MASTER_ADDR=${MASTER_ADDR:-${NODE_LIST[0]}}
     NUM_NODES=${#NODE_LIST[@]}
-    GPUS_PER_NODE=${SLURM_GPUS_ON_NODE:-8}
+    GPUS_PER_NODE=${SLURM_GPUS_ON_NODE:-${GPUS_PER_NODE}}
     NODE_RANK=${NODE_RANK:-${SLURM_NODEID:-0}}
     export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-"0"}
 else
     echo "Running in manual multi-node mode"
-    MASTER_ADDR=${MASTER_ADDR:-"10.21.0.3"}
-    NUM_NODES=${NUM_NODES:-2}
-    GPUS_PER_NODE=${GPUS_PER_NODE:-8}
-    NODE_RANK=${NODE_RANK:-0}
     export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-"1"}
 fi
 
-# ---------------------------------------------------------------------------
-# GPU split: 2 nodes × 8 GPUs = 16 GPUs
-#   ACTOR_NODES  = 1  →  8 GPUs for Megatron training  (tp=8, pp=1, cp=1)
-#   ROLLOUT_GPUS = 8  →  8 GPUs for SGLang inference   (1 engine × 8 GPUs)
-#
-# Note: --context-parallel-size is removed because cp=2 would require 16 training
-# GPUs (tp×cp×pp = 8×2×1 = 16), but we only allocate 8 to the actor in non-colocate mode.
-# ---------------------------------------------------------------------------
+# GPU split: actor training vs SGLang rollout
 ACTOR_NODES=1
 ACTOR_GPUS_PER_NODE=8
 ROLLOUT_GPUS=8              # total SGLang GPUs across all engines
 ROLLOUT_GPUS_PER_ENGINE=8   # one engine uses all 8 rollout GPUs
 
+# ---------------------------------------------------------------------------
 # Cleanup function
+# ---------------------------------------------------------------------------
 cleanup_worker_nodes() {
     echo "Cleaning up Ray processes..."
     ray stop --force 2>/dev/null || true
@@ -231,15 +342,15 @@ cleanup_worker_nodes() {
 }
 
 trap cleanup_worker_nodes EXIT INT TERM
-
-# Initial cleanup
 cleanup_worker_nodes
 sleep 2
 
-# Recreate spill dir after initial cleanup (cleanup_worker_nodes removes it)
+# Recreate spill dir after initial cleanup
 mkdir -p $RAY_SPILL_DIR
 
-# === IP Address ===
+# ---------------------------------------------------------------------------
+# IP address
+# ---------------------------------------------------------------------------
 HOST_IP=$(ip -4 addr show "$NETWORK_INTERFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
 if [ -z "$HOST_IP" ]; then
     echo "WARNING: Could not find IP for interface $NETWORK_INTERFACE, falling back to hostname -I"
@@ -247,7 +358,6 @@ if [ -z "$HOST_IP" ]; then
 fi
 echo "Node IP: $HOST_IP"
 
-SANDBOX_HOST=${SANDBOX_HOST:-"0.0.0.0"}
 if [ "$NODE_RANK" -eq 0 ]; then
     MASTER_IP=$HOST_IP
 else
@@ -260,76 +370,59 @@ else
 fi
 SANDBOX_URL="http://${MASTER_IP}:${SANDBOX_PORT}/run_code"
 
-# === Start SandboxFusion (Master Only) ===
+# ---------------------------------------------------------------------------
+# Start SandboxFusion (master only)
+# ---------------------------------------------------------------------------
 if [ "$NODE_RANK" -eq 0 ]; then
     echo "Starting SandboxFusion server..."
-    SANDBOX_DIR="${SANDBOX_DIR:-/workspace/S/shiwenxuan/verl/SandboxFusion}"
 
     if [ ! -d "$SANDBOX_DIR" ]; then
-        echo "ERROR: SandboxFusion directory not found at $SANDBOX_DIR"
-        exit 1
+        echo "WARNING: SandboxFusion directory not found at $SANDBOX_DIR"
+        echo "WARNING: Continuing without SandboxFusion (local_iverilog mode will still work)"
+    else
+        (
+            if command -v conda >/dev/null 2>&1; then
+                 conda activate sandbox-runtime 2>/dev/null || echo "WARNING: Could not activate sandbox-runtime env"
+            fi
+
+            cd "$SANDBOX_DIR"
+            mkdir -p "$NODE_EXEC_TMP_DIR"
+            nohup uvicorn sandbox.server.server:app --host ${SANDBOX_HOST} --port ${SANDBOX_PORT} > "${NODE_EXEC_TMP_DIR}/sandbox_fusion.log" 2>&1 &
+        )
+
+        for i in {1..30}; do
+            if curl -s http://127.0.0.1:${SANDBOX_PORT}/health >/dev/null 2>&1 || \
+               curl -s http://127.0.0.1:${SANDBOX_PORT}/ > /dev/null 2>&1 || \
+               curl -s http://127.0.0.1:${SANDBOX_PORT}/run_code > /dev/null 2>&1; then
+                echo "✓ SandboxFusion server is ready!"
+                break
+            fi
+            sleep 1
+        done
     fi
-
-    (
-        if command -v conda >/dev/null 2>&1; then
-             conda activate sandbox-runtime 2>/dev/null || echo "WARNING: Could not activate sandbox-runtime env"
-        fi
-
-        cd "$SANDBOX_DIR"
-        mkdir -p "$NODE_EXEC_TMP_DIR"
-        nohup uvicorn sandbox.server.server:app --host ${SANDBOX_HOST} --port ${SANDBOX_PORT} > "${NODE_EXEC_TMP_DIR}/sandbox_fusion.log" 2>&1 &
-    )
-
-    for i in {1..30}; do
-        if curl -s http://127.0.0.1:${SANDBOX_PORT}/health >/dev/null 2>&1 || \
-           curl -s http://127.0.0.1:${SANDBOX_PORT}/ > /dev/null 2>&1 || \
-           curl -s http://127.0.0.1:${SANDBOX_PORT}/run_code > /dev/null 2>&1; then
-            echo "✓ SandboxFusion server is ready!"
-            break
-        fi
-        sleep 1
-    done
 else
     sleep 5
 fi
 
-# === Tool Paths ===
-# Auto-detect from PATH if not set. Override in launch script or environment.
-export IVERILOG_PATH="${IVERILOG_PATH:-$(which iverilog 2>/dev/null || echo iverilog)}"
-export VVP_PATH="${VVP_PATH:-$(which vvp 2>/dev/null || echo vvp)}"
-export YOSYS_PATH="${YOSYS_PATH:-$(which yosys 2>/dev/null || echo yosys)}"
-# Extra binary directory to add to PATH in Ray workers (e.g. for iverilog/vvp/yosys).
-# Leave empty if tools are already on PATH in the worker environment.
-export CVDP_EXTRA_BIN_PATH="${CVDP_EXTRA_BIN_PATH:-}"
-
-# === Data Paths ===
-# Default to in-repo data; override with NFS/shared paths for large-scale runs.
-export CODEV_TEST_ROOT="${CODEV_TEST_ROOT:-${IVERILOG_R1_DIR}/codev_test}"
-export CVDP_TESTENV_ROOT="${CVDP_TESTENV_ROOT:-${IVERILOG_R1_DIR}/codev_test/train_testenv}"
-DATA_PATH="${DATA_PATH:-${IVERILOG_R1_DIR}/data/cvdp_testbench_172}"
-TRAIN_FILE="train.parquet"
-
-echo "=== Training dataset: ${DATA_PATH}/${TRAIN_FILE} (dynamic curriculum) ==="
-echo "=== CVDP_TESTENV_ROOT: ${CVDP_TESTENV_ROOT} ==="
-
-# === Model Config ===
-MODEL_PATH="${MODEL_PATH:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270}"
-CKPT_BASE="${CKPT_BASE:-/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs/checkpoint-1270_torch_dist}"
-
+# ---------------------------------------------------------------------------
+# Export tool / runtime env vars (used locally and forwarded to Ray workers)
+# ---------------------------------------------------------------------------
+export IVERILOG_PATH
+export VVP_PATH
+export YOSYS_PATH
+export CVDP_EXTRA_BIN_PATH
+export CODEV_TEST_ROOT
+export CVDP_TESTENV_ROOT
 export TOKENIZERS_PARALLELISM=false
 export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
 export IVERILOG_EXECUTION_METHOD=local_iverilog
 export SANDBOX_FUSION_CONCURRENCY=32
 export IVERILOG_URL="${SANDBOX_URL}"
-export IVERILOG_TMP_DIR="${IVERILOG_TMP_DIR:-/tmp/iverilog_tmp}"
+export IVERILOG_TMP_DIR
 
-# === Python dependency paths for Ray workers ===
-MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/workspace/S/shiwenxuan/Megatron-LM}"
-SGLANG_GATEWAY_PATH="${SGLANG_GATEWAY_PATH:-/workspace/S/shiwenxuan/sglang/sgl-model-gateway/bindings/python}"
-SGLANG_PYTHON_PATH="${SGLANG_PYTHON_PATH:-/workspace/S/shiwenxuan/sglang/python}"
-VERL_PATH="${VERL_PATH:-/workspace/S/shiwenxuan/verl}"
-RAY_WORKER_PYTHONPATH="${SGLANG_GATEWAY_PATH}:${MEGATRON_LM_PATH}:${SCRIPT_DIR}:${SLIME_ROOT}:${SGLANG_PYTHON_PATH}:${VERL_PATH}:${IVERILOG_R1_DIR}/eda_tools"
-
+# ---------------------------------------------------------------------------
+# Training argument arrays
+# ---------------------------------------------------------------------------
 MODEL_ARGS=(
    --swiglu
    --num-layers 36
@@ -352,8 +445,8 @@ MODEL_ARGS=(
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_PATH}
    --ref-load ${CKPT_BASE}
-   --load ${CKPT_BASE}/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6
-   --save ${CKPT_BASE}/dynamic_curriculum_kl0.0_update2_eval3_lr2e-6
+   --load ${CKPT_BASE}/${CKPT_SAVE_NAME}
+   --save ${CKPT_BASE}/${CKPT_SAVE_NAME}
    --save-interval 10
 )
 
@@ -399,8 +492,6 @@ PERF_ARGS=(
    --tensor-model-parallel-size 8
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   # context-parallel-size removed: cp=2 requires 16 training GPUs (tp×cp=8×2),
-   # but we allocate only 8 GPUs to the actor in non-colocate mode.
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
@@ -420,11 +511,6 @@ GRPO_ARGS=(
    --eps-clip 0.2
    --eps-clip-high 0.28
    --use-tis
-
-   # How often (in training steps) the actor weights are synced to the SGLang
-   # engine.  With fully-async, the worker keeps generating with old weights
-   # during these N steps, introducing mild off-policy bias.  Lower values
-   # reduce staleness but increase sync overhead.
    --update-weights-interval 2
 )
 
@@ -439,9 +525,9 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-mode offline
-   --wandb-project slime-async-cvdp-train
-   --wandb-group cvdp_testbench_reward_qwen3_8b
+   --wandb-mode ${WANDB_MODE}
+   --wandb-project ${WANDB_PROJECT}
+   --wandb-group ${WANDB_GROUP}
    ${WANDB_API_KEY:+--wandb-key "${WANDB_API_KEY}"}
 )
 
@@ -464,16 +550,14 @@ MISC_ARGS=(
 
 CUSTOM_ARGS=(
    --custom-generate-function-path generate_with_iverilog.generate
-   # Use testbench-based reward instead of golden-code equivalence checking
    --custom-rm-path cvdp_testbench_reward.reward_func
-   # Keep the same CVDP eval mechanism (172-question accuracy benchmark)
    --eval-function-path custom_eval_cvdp.custom_eval_cvdp
 )
 
-# === Start Ray ===
+# ---------------------------------------------------------------------------
+# Start Ray
+# ---------------------------------------------------------------------------
 # 60 GB object store: reduces spilling from the default 20 GB.
-# Fully-async training keeps many rollout groups + eval responses in flight
-# simultaneously; 20 GB is too small and causes heavy spilling to disk.
 OBJECT_STORE_MEMORY=$((60 * 1024 * 1024 * 1024))
 
 if [ "$NODE_RANK" -eq 0 ]; then
@@ -526,7 +610,9 @@ else
     exit 0
 fi
 
-# === Submit Job (Master Only) ===
+# ---------------------------------------------------------------------------
+# Submit job (master only)
+# ---------------------------------------------------------------------------
 if [ "$NODE_RANK" -eq 0 ]; then
     echo "Waiting for $NUM_NODES nodes..."
     while true; do
@@ -556,11 +642,6 @@ if [ "$NODE_RANK" -eq 0 ]; then
     done
 
     sleep 5
-
-    # pytest executable whose Python env has cocotb + all CVDP test packages.
-    # The Ray workers run under a micromamba env that lacks pytest/cocotb, so
-    # we must point explicitly to the correct pytest binary.
-    CVDP_PYTEST_PATH="${CVDP_PYTEST_PATH:-$(which pytest 2>/dev/null || echo pytest)}"
 
     RUNTIME_ENV_JSON=$(jq -n \
         --arg PYTHONPATH "${RAY_WORKER_PYTHONPATH}" \
@@ -616,9 +697,6 @@ if [ "$NODE_RANK" -eq 0 ]; then
     RETRY_COUNT=0
 
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        # NOTE: train_async.py instead of train.py
-        #       --actor-num-nodes / --actor-num-gpus-per-node set to training slice
-        #       --colocate is NOT passed
         if ray job submit --address="${LOCAL_DASHBOARD_URL}" \
            --runtime-env-json="${RUNTIME_ENV_JSON}" \
            -- python3 ${SLIME_ROOT}/train_async.py \

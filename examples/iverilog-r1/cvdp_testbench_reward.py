@@ -95,13 +95,19 @@ CVDP_TESTENV_ROOT = os.environ.get(
 # Set CVDP_EXTRA_BIN_PATH in the launch script if these tools are not on PATH.
 EXTRA_BIN_PATH = os.environ.get("CVDP_EXTRA_BIN_PATH", "")
 
-# Explicit path to the pytest executable to use for CVDP testbench runs.
-# The Ray workers may run under a Python environment (e.g. a micromamba env)
-# that does not have pytest/cocotb installed.  Set CVDP_PYTEST_PATH in the
-# launch script's runtime_env to point to a pytest binary whose Python
-# environment *does* have cocotb and all required test packages.
-# Falls back to "pytest" (PATH lookup) so existing setups are unaffected.
-CVDP_PYTEST_PATH = os.environ.get("CVDP_PYTEST_PATH", "pytest")
+# Determine the pytest command to use for CVDP testbench runs.
+# Priority:
+#   1. CVDP_PYTEST_PATH env var — set this to an absolute path when pytest/cocotb
+#      live in a separate Python environment from the one running this reward function.
+#   2. sys.executable -m pytest — uses the *same* Python that runs this reward
+#      function, guaranteed to be on disk even without a modified PATH.
+_cvdp_pytest_override = os.environ.get("CVDP_PYTEST_PATH", "")
+# Only use the override if it points to an actual file; bare names like "pytest"
+# are NOT trusted because Ray workers may not have it on PATH.
+if _cvdp_pytest_override and os.path.isfile(_cvdp_pytest_override):
+    CVDP_PYTEST_CMD = [_cvdp_pytest_override]
+else:
+    CVDP_PYTEST_CMD = [sys.executable, "-m", "pytest"]
 
 # Per-test timeout (seconds) – keep equal to cvdp_run_test.py default
 TEST_TIMEOUT = 120
@@ -207,16 +213,13 @@ def _run_test_sync(task_id: str, code: str, template_dir: Path) -> bool:
         rtl_path.write_text(code, encoding="utf-8")
 
         # Build subprocess environment.
-        # We use sys.executable (the current Python that runs this reward
-        # function, i.e. the slime conda env) to invoke pytest as a module.
-        # This avoids any PATH-based pytest resolution that could accidentally
-        # pick up a broken pytest from another conda environment (e.g. the
-        # verl env whose 'idna.core' is missing).
+        # CVDP_PYTEST_CMD uses sys.executable -m pytest by default so that
+        # pytest is always findable (no PATH dependency in Ray workers).
         # EXTRA_BIN_PATH is still appended to PATH so that iverilog / vvp /
-        # yosys binaries (only present there) remain discoverable by cocotb.
+        # yosys binaries remain discoverable by cocotb.
         proc_env = os.environ.copy()
         current_path = proc_env.get("PATH", "")
-        if EXTRA_BIN_PATH not in current_path:
+        if EXTRA_BIN_PATH and EXTRA_BIN_PATH not in current_path:
             proc_env["PATH"] = f"{current_path}:{EXTRA_BIN_PATH}"
         proc_env.update(env_vars)
         # Fix VERILOG_SOURCES path: strip docker-style /code/ prefix
@@ -224,7 +227,7 @@ def _run_test_sync(task_id: str, code: str, template_dir: Path) -> bool:
             proc_env["VERILOG_SOURCES"] = proc_env["VERILOG_SOURCES"].replace("/code/", "")
 
         result = subprocess.run(
-            [CVDP_PYTEST_PATH, "-v", "-s", "src/test_runner.py"],
+            CVDP_PYTEST_CMD + ["-v", "-s", "src/test_runner.py"],
             cwd=str(run_dir),
             capture_output=True,
             text=True,
