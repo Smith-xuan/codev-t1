@@ -398,7 +398,6 @@ if [[ "${ROLE}" == "head" ]]; then
     --include-dashboard=False
 
   printf '%s\n' "${HOST_IP}" > "${HEAD_IP_FILE}"
-  wait_for_dashboard
   wait_for_cluster
 
   RUNTIME_ENV_JSON="$(build_runtime_env_json)"
