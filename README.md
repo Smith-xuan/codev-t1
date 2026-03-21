@@ -8,7 +8,8 @@
 
 - 配置文件：`examples/iverilog-r1/brainpp/qwen3_8b_cvdp_testbench.conf`
 - 容器内实验入口：`examples/iverilog-r1/brainpp/run_qwen3_8b_cvdp_testbench_brainpp.sh`
-- 一键提交脚本：`examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh`
+- `jlaunch` 一键提交脚本：`examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh`
+- `rjob submit` 风格入口：`examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_rjob.sh`
 - 旧 Slurm 脚本：`examples/iverilog-r1/run_qwen3_8b_cvdp_testbench.sh`（仅保留参考）
 
 ## 现在的路径约定
@@ -80,12 +81,20 @@ vim examples/iverilog-r1/brainpp/qwen3_8b_cvdp_testbench.conf
 - `JLAUNCH_CHARGED_GROUP`
 - `JLAUNCH_POSITIVE_TAGS`
 - `JLAUNCH_CUSTOM_RESOURCES`
+- `RJOB_IMAGE`
+- `RJOB_CHARGED_GROUP`
+- `RJOB_POSITIVE_TAGS`
+- `RJOB_CUSTOM_RESOURCES`
+
+### 用 `jlaunch` / `brainctl rjob launch`
 
 然后直接提交：
 
 ```bash
-RUN_NAME=qwen3_8b_cvdp_testbench_$(date +%Y%m%d_%H%M%S) \
+RUN_NAME=qwen3-8b-cvdp-$(date +%d%H%M) \
 JLAUNCH_CHARGED_GROUP=step1o \
+JLAUNCH_PRIVATE_MACHINE=group \
+JLAUNCH_CUSTOM_RESOURCES=rdma/mlnx_shared=8,mellanox.com/mlnx_rdma=1 \
 JLAUNCH_POSITIVE_TAGS=H800 \
 NUM_NODES=2 \
 bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh
@@ -96,6 +105,27 @@ bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh
 ```bash
 JLAUNCH_CUSTOM_RESOURCES=rdma/mlnx_shared=8,mellanox.com/mlnx_rdma=1
 ```
+
+### 用 `rjob submit`
+
+如果你所在环境仍提供老的 `rjob submit` CLI，可使用同等入口：
+
+```bash
+RUN_NAME=qwen3-8b-cvdp-$(date +%d%H%M) \
+RJOB_CHARGED_GROUP=step1o \
+RJOB_PRIVATE_MACHINE=group \
+RJOB_CUSTOM_RESOURCES=rdma/mlnx_shared=8,mellanox.com/mlnx_rdma=1 \
+RJOB_POSITIVE_TAGS=H800 \
+NUM_NODES=2 \
+bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_rjob.sh
+```
+
+这个脚本会提交两个 job：
+
+1. 一个 head job
+2. 一个 worker job（`replica = NUM_NODES - 1`）
+
+两者仍然共享同一个挂载存储目录，并通过 `HEAD_IP_FILE` 传递 Ray head IP。
 
 提交脚本会自动完成：
 
@@ -123,10 +153,27 @@ JLAUNCH_MOUNT_SPECS="juicefs+s3://oss.i.shaipower.com/i-zhangxiaoyun:/mnt/i-zhan
 bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_jlaunch.sh
 ```
 
+`rjob submit` 入口对应变量名分别是：
+
+- `RJOB_MOUNT_SPECS`
+- `RJOB_EXTRA_VOLUMES`
+- `RJOB_HEAD_CPU`
+- `RJOB_HEAD_MEMORY_MIB`
+- `RJOB_HEAD_GPU`
+- `RJOB_WORKER_CPU`
+- `RJOB_WORKER_MEMORY_MIB`
+- `RJOB_WORKER_GPU`
+
 如确有额外 volume 需求，可设置：
 
 ```bash
 JLAUNCH_EXTRA_VOLUMES="/mnt:/mnt"
+```
+
+或：
+
+```bash
+RJOB_EXTRA_VOLUMES="/mnt:/mnt"
 ```
 
 ## 这次改动去掉了什么
@@ -139,5 +186,6 @@ JLAUNCH_EXTRA_VOLUMES="/mnt:/mnt"
 ## 备注
 
 - `jlaunch` 本质上就是 `brainctl rjob launch`
+- `submit_qwen3_8b_cvdp_testbench_rjob.sh` 面向仍保留 `rjob submit` 命令的环境
 - 当前运行方式是“本机仓库 → 挂载存储 → 容器本地工作目录”
 - 如果后续切换其他 BrainPP 提交流程，核心训练入口仍然是 `examples/iverilog-r1/brainpp/run_qwen3_8b_cvdp_testbench_brainpp.sh`

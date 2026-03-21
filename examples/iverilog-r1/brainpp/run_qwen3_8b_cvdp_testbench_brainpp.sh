@@ -116,6 +116,8 @@ if [[ -z "${HOST_IP}" ]]; then
   exit 1
 fi
 
+MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/root/Megatron-LM}"
+
 build_pythonpath() {
   local parts=("${REPO_ROOT}" "${EXAMPLE_DIR}" "${EXAMPLE_DIR}/eda_tools")
   local optional_parts=(
@@ -154,6 +156,7 @@ keys = [
     "PYTHONPATH",
     "PATH",
     "LD_LIBRARY_PATH",
+    "MEGATRON_LM_PATH",
     "REPO_ROOT",
     "EXAMPLE_DIR",
     "MOUNT_ROOT",
@@ -162,6 +165,7 @@ keys = [
     "DATA_PATH",
     "TRAIN_FILE",
     "MODEL_PATH",
+    "HF_MODEL_PATH",
     "CKPT_BASE",
     "CKPT_SAVE_NAME",
     "WANDB_DIR",
@@ -274,8 +278,8 @@ MODEL_ARGS=(
 )
 
 CKPT_ARGS=(
-  --hf-checkpoint "${MODEL_PATH}"
-  --ref-load "${CKPT_BASE}"
+  --hf-checkpoint "${HF_MODEL_PATH}"
+  --ref-load "${MODEL_PATH}"
   --load "${CKPT_BASE}/${CKPT_SAVE_NAME}"
   --save "${CKPT_BASE}/${CKPT_SAVE_NAME}"
   --save-interval 10
