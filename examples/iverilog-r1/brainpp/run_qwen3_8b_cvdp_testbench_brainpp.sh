@@ -423,11 +423,11 @@ if [[ "${ROLE}" == "head" ]]; then
     "${CUSTOM_ARGS[@]}"
 else
   echo "Waiting for head IP file: ${HEAD_IP_FILE}"
-  for _ in $(seq 1 180); do
+  for _ in $(seq 1 300); do
     if [[ -s "${HEAD_IP_FILE}" ]]; then
       break
     fi
-    sleep 2
+    sleep 12
   done
 
   if [[ ! -s "${HEAD_IP_FILE}" ]]; then
