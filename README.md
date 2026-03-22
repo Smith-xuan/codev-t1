@@ -142,8 +142,8 @@ bash examples/iverilog-r1/brainpp/submit_qwen3_8b_cvdp_testbench_rjob.sh
 ```bash
 MODEL_PATH=/mnt/i-zhangxiaoyun/models/shiyelnts-ori-2-dist \
 HF_MODEL_PATH=/mnt/i-zhangxiaoyun/models/shiyelnts-ori-2 \
-CKPT_SAVE_NAME=dynamic_curriculum_2stage \
-RUN_NAME=qwen3-8b-2stage-$(date +%d%H%M) \
+CKPT_SAVE_NAME=dynamic_curriculum_2stage_minilr \
+RUN_NAME=qwen3-8b-minilr-$(date +%d%H%M) \
 RJOB_CHARGED_GROUP=step1o \
 RJOB_PRIVATE_MACHINE=group \
 RJOB_CUSTOM_RESOURCES=rdma/mlnx_shared=8,mellanox.com/mlnx_rdma=1 \

@@ -282,7 +282,7 @@ CKPT_ARGS=(
   --ref-load "${MODEL_PATH}"
   --load "${CKPT_BASE}/${CKPT_SAVE_NAME}"
   --save "${CKPT_BASE}/${CKPT_SAVE_NAME}"
-  --save-interval 10
+  --save-interval 100000
 )
 
 ROLLOUT_ARGS=(
@@ -295,7 +295,7 @@ ROLLOUT_ARGS=(
   --apply-chat-template
   --rollout-shuffle
   --num-rollout 1000
-  --rollout-batch-size 16
+  --rollout-batch-size 32
   --n-samples-per-prompt 8
   --rollout-max-response-len 30000
   --rollout-max-context-len 36000
@@ -343,7 +343,7 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
   --optimizer adam
-  --lr 2e-6
+  --lr 1e-6
   --lr-decay-style constant
   --weight-decay 0.01
   --adam-beta1 0.9
