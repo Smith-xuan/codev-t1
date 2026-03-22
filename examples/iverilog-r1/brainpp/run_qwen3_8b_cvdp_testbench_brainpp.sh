@@ -395,9 +395,11 @@ if [[ "${ROLE}" == "head" ]]; then
     --num-gpus "${GPUS_PER_NODE}" \
     --disable-usage-stats \
     --temp-dir "${RAY_TMPDIR}" \
-    --include-dashboard=False
+    --dashboard-host 0.0.0.0 \
+    --dashboard-port "${RAY_DASHBOARD_PORT}" 
 
   printf '%s\n' "${HOST_IP}" > "${HEAD_IP_FILE}"
+  wait_for_dashboard
   wait_for_cluster
 
   RUNTIME_ENV_JSON="$(build_runtime_env_json)"
