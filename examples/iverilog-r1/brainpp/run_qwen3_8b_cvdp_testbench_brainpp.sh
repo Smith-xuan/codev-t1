@@ -116,6 +116,25 @@ if [[ -z "${HOST_IP}" ]]; then
   exit 1
 fi
 
+is_truthy() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+if is_truthy "${RAY_INCLUDE_DASHBOARD:-0}"; then
+  RAY_INCLUDE_DASHBOARD_FLAG=1
+  echo "Ray dashboard mode: enabled"
+else
+  RAY_INCLUDE_DASHBOARD_FLAG=0
+  echo "Ray dashboard mode: disabled; will run driver directly on the head node"
+fi
+
 MEGATRON_LM_PATH="${MEGATRON_LM_PATH:-/root/Megatron-LM}"
 
 build_pythonpath() {
@@ -207,6 +226,65 @@ print(json.dumps({"env_vars": env}, ensure_ascii=False))
 PY
 }
 
+run_training_directly() {
+  local runtime_env_json="$1"
+  shift
+
+  export RAY_ADDRESS="${RAY_ADDRESS:-auto}"
+
+  python3 - "${runtime_env_json}" "${REPO_ROOT}/train_async.py" "$@" <<'PY'
+import json
+import os
+import runpy
+import sys
+
+import ray
+
+runtime_env_json = sys.argv[1]
+script_path = sys.argv[2]
+script_args = sys.argv[3:]
+
+runtime_env = json.loads(runtime_env_json) if runtime_env_json else {}
+ray.init(address=os.environ.get("RAY_ADDRESS", "auto"), runtime_env=runtime_env)
+
+sys.argv = [script_path, *script_args]
+runpy.run_path(script_path, run_name="__main__")
+PY
+}
+
+print_dashboard_logs() {
+  local logs_dir=""
+  local latest_session=""
+  local dashboard_file=""
+
+  if [[ -d "${RAY_TMPDIR}/session_latest/logs" ]]; then
+    logs_dir="${RAY_TMPDIR}/session_latest/logs"
+  else
+    latest_session="$(
+      find "${RAY_TMPDIR}" -maxdepth 1 -type d -name 'session_*' 2>/dev/null \
+        | LC_ALL=C sort \
+        | tail -n 1
+    )"
+    if [[ -n "${latest_session}" && -d "${latest_session}/logs" ]]; then
+      logs_dir="${latest_session}/logs"
+    fi
+  fi
+
+  if [[ -z "${logs_dir}" ]]; then
+    echo "WARN: could not locate Ray dashboard logs under ${RAY_TMPDIR}" >&2
+    return 0
+  fi
+
+  for dashboard_file in dashboard.err dashboard.log; do
+    echo "----- ${dashboard_file}: ${logs_dir}/${dashboard_file} -----" >&2
+    if [[ -f "${logs_dir}/${dashboard_file}" ]]; then
+      tail -n 200 "${logs_dir}/${dashboard_file}" >&2 || true
+    else
+      echo "WARN: ${dashboard_file} not found" >&2
+    fi
+  done
+}
+
 wait_for_dashboard() {
   local attempt
   for attempt in $(seq 1 60); do
@@ -228,6 +306,7 @@ PY
   done
 
   echo "ERROR: Ray dashboard did not become ready on port ${RAY_DASHBOARD_PORT}" >&2
+  print_dashboard_logs
   return 1
 }
 
@@ -299,7 +378,7 @@ ROLLOUT_ARGS=(
   --n-samples-per-prompt 8
   --rollout-max-response-len 30000
   --rollout-max-context-len 36000
-  --over-sampling-batch-size 22
+  --over-sampling-batch-size 64
   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
   --rollout-temperature 1.0
   --start-rollout-id 0
@@ -388,39 +467,69 @@ fi
 
 if [[ "${ROLE}" == "head" ]]; then
   echo "Starting Ray head on ${HOST_IP}:${MASTER_PORT}"
-  ray start \
+  ray_start_cmd=(
+    ray start \
     --head \
     --node-ip-address "${HOST_IP}" \
     --port "${MASTER_PORT}" \
     --num-gpus "${GPUS_PER_NODE}" \
     --disable-usage-stats \
-    --temp-dir "${RAY_TMPDIR}" \
-    --dashboard-host 0.0.0.0 \
-    --dashboard-port "${RAY_DASHBOARD_PORT}" 
+    --temp-dir "${RAY_TMPDIR}"
+  )
+
+  if [[ "${RAY_INCLUDE_DASHBOARD_FLAG}" == "1" ]]; then
+    ray_start_cmd+=(
+      --include-dashboard=true
+      --dashboard-host 0.0.0.0
+      --dashboard-port "${RAY_DASHBOARD_PORT}"
+    )
+  else
+    ray_start_cmd+=(--include-dashboard=false)
+  fi
+
+  "${ray_start_cmd[@]}"
 
   printf '%s\n' "${HOST_IP}" > "${HEAD_IP_FILE}"
-  wait_for_dashboard
+  if [[ "${RAY_INCLUDE_DASHBOARD_FLAG}" == "1" ]]; then
+    wait_for_dashboard
+  fi
   wait_for_cluster
 
   RUNTIME_ENV_JSON="$(build_runtime_env_json)"
 
   cd "${REPO_ROOT}"
-  ray job submit \
-    --address "http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
-    --runtime-env-json "${RUNTIME_ENV_JSON}" \
-    -- python3 "${REPO_ROOT}/train_async.py" \
-    --actor-num-nodes "${ACTOR_NUM_NODES}" \
-    --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE}" \
-    "${MODEL_ARGS[@]}" \
-    "${CKPT_ARGS[@]}" \
-    "${ROLLOUT_ARGS[@]}" \
-    "${OPTIMIZER_ARGS[@]}" \
-    "${GRPO_ARGS[@]}" \
-    "${WANDB_ARGS[@]}" \
-    "${PERF_ARGS[@]}" \
-    "${SGLANG_ARGS[@]}" \
-    "${MISC_ARGS[@]}" \
-    "${CUSTOM_ARGS[@]}"
+  if [[ "${RAY_INCLUDE_DASHBOARD_FLAG}" == "1" ]]; then
+    ray job submit \
+      --address "http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
+      --runtime-env-json "${RUNTIME_ENV_JSON}" \
+      -- python3 "${REPO_ROOT}/train_async.py" \
+      --actor-num-nodes "${ACTOR_NUM_NODES}" \
+      --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE}" \
+      "${MODEL_ARGS[@]}" \
+      "${CKPT_ARGS[@]}" \
+      "${ROLLOUT_ARGS[@]}" \
+      "${OPTIMIZER_ARGS[@]}" \
+      "${GRPO_ARGS[@]}" \
+      "${WANDB_ARGS[@]}" \
+      "${PERF_ARGS[@]}" \
+      "${SGLANG_ARGS[@]}" \
+      "${MISC_ARGS[@]}" \
+      "${CUSTOM_ARGS[@]}"
+  else
+    run_training_directly "${RUNTIME_ENV_JSON}" \
+      --actor-num-nodes "${ACTOR_NUM_NODES}" \
+      --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE}" \
+      "${MODEL_ARGS[@]}" \
+      "${CKPT_ARGS[@]}" \
+      "${ROLLOUT_ARGS[@]}" \
+      "${OPTIMIZER_ARGS[@]}" \
+      "${GRPO_ARGS[@]}" \
+      "${WANDB_ARGS[@]}" \
+      "${PERF_ARGS[@]}" \
+      "${SGLANG_ARGS[@]}" \
+      "${MISC_ARGS[@]}" \
+      "${CUSTOM_ARGS[@]}"
+  fi
 else
   echo "Waiting for head IP file: ${HEAD_IP_FILE}"
   for _ in $(seq 1 300); do
