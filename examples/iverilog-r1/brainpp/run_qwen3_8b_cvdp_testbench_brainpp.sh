@@ -374,11 +374,11 @@ ROLLOUT_ARGS=(
   --apply-chat-template
   --rollout-shuffle
   --num-rollout 1000
-  --rollout-batch-size 32
+  --rollout-batch-size 16
   --n-samples-per-prompt 8
   --rollout-max-response-len 30000
   --rollout-max-context-len 36000
-  --over-sampling-batch-size 64
+  --over-sampling-batch-size 32
   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
   --rollout-temperature 1.0
   --start-rollout-id 0

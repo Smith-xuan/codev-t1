@@ -23,13 +23,16 @@ def _log_eval_to_primary_wandb(args, eval_metrics):
 
 
 def _apply_curriculum_filter(args, rollout_manager, eval_metrics):
-    """After eval, update the training dataset to the dynamic curriculum.
+    """After eval, optionally update the training dataset to the dynamic curriculum.
 
-    Problems where 1 ≤ pass_count < n_eval_samples are selected as the next
-    training batch (medium difficulty for the current model).  If no filter
-    task_ids are returned (e.g. standalone eval without CVDP custom eval),
-    the filter is left unchanged.
+    Only active when --eval-dynamic-curriculum is set.  When disabled (default),
+    the training prompt set is not changed after eval — all tasks remain active.
+
+    When enabled: problems where 1 ≤ pass_count < n_eval_samples are selected as
+    the next training batch (medium difficulty for the current model).
     """
+    if not getattr(args, "eval_dynamic_curriculum", False):
+        return
     task_ids = (eval_metrics or {}).get("_train_filter_task_ids")
     if task_ids is None:
         return
