@@ -92,8 +92,13 @@ CVDP_TESTENV_ROOT = os.environ.get(
 )
 
 # Additional binary directory that provides iverilog / vvp / yosys.
-# Set CVDP_EXTRA_BIN_PATH in the launch script if these tools are not on PATH.
-EXTRA_BIN_PATH = os.environ.get("CVDP_EXTRA_BIN_PATH", "")
+# Defaults to the directory containing IVERILOG_PATH so cocotb_tools'
+# shutil.which("iverilog") can find the binary even when PATH is not set.
+_iverilog_bin = os.environ.get("IVERILOG_PATH", "")
+_iverilog_dir = os.path.dirname(_iverilog_bin) if _iverilog_bin else ""
+# Ray runtime-env always sets CVDP_EXTRA_BIN_PATH (often to "").  Using .get(..., default)
+# would not fall back when the key exists but is empty; cocotb then cannot find iverilog on PATH.
+EXTRA_BIN_PATH = os.environ.get("CVDP_EXTRA_BIN_PATH", "").strip() or _iverilog_dir
 
 # Determine the pytest command to use for CVDP testbench runs.
 # Priority:

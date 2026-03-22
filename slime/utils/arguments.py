@@ -652,6 +652,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--eval-temperature", type=float, default=None)
             parser.add_argument("--eval-top-p", type=float, default=None)
             parser.add_argument("--eval-top-k", type=int, default=None)
+            parser.add_argument(
+                "--eval-dynamic-curriculum",
+                action="store_true",
+                default=False,
+                help=(
+                    "When set, use eval results to update the training prompt set after each eval "
+                    "(keep only 'medium difficulty' tasks: 1 ≤ pass_count < n_eval_samples). "
+                    "Default is disabled — the training set stays fixed across evals."
+                ),
+            )
             parser.add_argument("--eval-max-response-len", type=int, default=None)
             parser.add_argument("--eval-max-prompt-len", type=int, default=None)
             parser.add_argument("--eval-min-new-tokens", type=int, default=None)
