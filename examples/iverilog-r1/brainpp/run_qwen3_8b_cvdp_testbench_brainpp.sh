@@ -383,7 +383,7 @@ ROLLOUT_ARGS=(
   --rollout-temperature 1.0
   --start-rollout-id 0
   --partial-rollout
-  --eval-interval 20
+  --eval-interval 30
   --eval-prompt-data codev_test "${DATA_PATH}/${TRAIN_FILE}"
   --eval-input-key prompt
   --eval-label-key reward_model
@@ -391,6 +391,7 @@ ROLLOUT_ARGS=(
   --n-samples-per-eval-prompt 3
   --eval-max-response-len 30000
   --eval-max-context-len 36000
+  --skip-eval-before-train
   --global-batch-size 128
   --balance-data
 )
