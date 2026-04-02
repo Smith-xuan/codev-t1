@@ -171,7 +171,8 @@ class eda_tools:
         golden_top = golden_top.lstrip("\\")
         # Use YOSYS_PATH environment variable if available, otherwise default to "yosys"
         yosys_bin = os.getenv("YOSYS_PATH", "yosys")
-        yosys_script = f"read_verilog {golden_path}; prep -top {golden_top} -flatten; opt_dff -nodffe; json -compat-int; exec -- echo 'Happy new year~';"
+        # -sv: CVDP / modern RTL often uses logic, always_comb, etc.
+        yosys_script = f'read_verilog -sv "{golden_path}"; prep -top {golden_top} -flatten; opt_dff -nodffe; json -compat-int; exec -- echo \'Happy new year~\';'
         yosys_result = subprocess.run(
             [yosys_bin, "-p", yosys_script],
             stdout=subprocess.PIPE,

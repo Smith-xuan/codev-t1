@@ -302,14 +302,24 @@ export YOSYS_PATH="/workspace/S/zhuyaoyu/softwares/miniconda3/envs/verl/bin/yosy
 # Leave empty if tools are already on PATH in the worker environment.
 export CVDP_EXTRA_BIN_PATH="${CVDP_EXTRA_BIN_PATH:-}"
 
+# === Reward Mode ===
+# "cvdp"      — CVDP testbench-based reward & eval (default, for overfitting experiments)
+# "eda_tools" — eda_tools auto-testbench reward, combined eval (curriculum + CVDP benchmark)
+REWARD_MODE="${REWARD_MODE:-cvdp}"
+
 # === Data Paths ===
 # Default to in-repo data; override with NFS/shared paths for large-scale runs.
 export CODEV_TEST_ROOT="${CODEV_TEST_ROOT:-${IVERILOG_R1_DIR}/codev_test}"
 export CVDP_TESTENV_ROOT="${CVDP_TESTENV_ROOT:-${IVERILOG_R1_DIR}/codev_test/train_testenv}"
-DATA_PATH="${DATA_PATH:-${IVERILOG_R1_DIR}/data/cvdp_testbench_172}"
+if [ "$REWARD_MODE" = "eda_tools" ]; then
+    DATA_PATH="${DATA_PATH:-${IVERILOG_R1_DIR}/data/eda_tools_200}"
+else
+    DATA_PATH="${DATA_PATH:-${IVERILOG_R1_DIR}/data/cvdp_testbench_172}"
+fi
 TRAIN_FILE="train.parquet"
 
-echo "=== Training dataset: ${DATA_PATH}/${TRAIN_FILE} (dynamic curriculum) ==="
+echo "=== REWARD_MODE: ${REWARD_MODE} ==="
+echo "=== Training dataset: ${DATA_PATH}/${TRAIN_FILE} ==="
 echo "=== CVDP_TESTENV_ROOT: ${CVDP_TESTENV_ROOT} ==="
 
 # === Model Config ===
@@ -465,11 +475,21 @@ MISC_ARGS=(
 
 CUSTOM_ARGS=(
    --custom-generate-function-path generate_with_iverilog.generate
-   # Use testbench-based reward instead of golden-code equivalence checking
-   --custom-rm-path cvdp_testbench_reward.reward_func
-   # Keep the same CVDP eval mechanism (172-question accuracy benchmark)
-   --eval-function-path custom_eval_cvdp.custom_eval_cvdp
 )
+if [ "$REWARD_MODE" = "eda_tools" ]; then
+   # eda_tools mode: auto-testbench reward + combined eval (curriculum + CVDP benchmark)
+   CUSTOM_ARGS+=(
+      --custom-rm-path eda_tools_reward.reward_func
+      --eval-function-path custom_eval_combined.custom_eval_combined
+      --eval-dynamic-curriculum
+   )
+else
+   # CVDP mode (default): pre-generated testbench reward + CVDP-only eval
+   CUSTOM_ARGS+=(
+      --custom-rm-path cvdp_testbench_reward.reward_func
+      --eval-function-path custom_eval_cvdp.custom_eval_cvdp
+   )
+fi
 
 # === Start Ray ===
 # 60 GB object store: reduces spilling from the default 20 GB.

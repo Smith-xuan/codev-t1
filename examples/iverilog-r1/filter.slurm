@@ -2,22 +2,30 @@
 
 #- Job parameters
 
-#SBATCH -J slime-qwen3-8b-multinodes              # The job name
+# (TODO)
+# Please modify job name
+
+#SBATCH -J filter-rl-data               # The job name
 #SBATCH -o ret_one/%j.out        # Write the standard output to file named 'ret-<job_number>.out'
 #SBATCH -e ret_one/%j.err        # Write the standard error to file named 'ret-<job_number>.err'
 
+
 #SBATCH --mem=0
 #SBATCH --exclusive
-#SBATCH --ntasks-per-node=1          # Request 1 task per node
+#SBATCH --ntasks-per-node=1          # Request P tasks per node
+###SBATCH --cpus-per-task=48           # Request Q core per task; means that P*Q cores per node
 
 # SBATCH
-#SBATCH -p r8nv-gpu-hw-80g              # Submit to 'r8nv-gpu-hw' Partition
-#SBATCH -t 0-6:00:00                # Run for a maximum time of 1 day, 6 hours
-#SBATCH --nodes=1                    # Request 2 nodes
-#SBATCH --gres=gpu:4                 # Request 8 GPUs per node
+#SBATCH -p r8nv-gpu-hw           # Submit to 'r8nv-gpu-hw' Partitiion
+#SBATCH -t 3-00:00:00                # Run for a maximum time of 0 days, 12 hours, 00 mins, 00 secs
+#SBATCH --nodes=1                    # Request N nodes
+#SBATCH --gres=gpu:8                 # Request M GPU per node
 #SBATCH --gres-flags=enforce-binding # CPU-GPU Affinity
-#SBATCH --qos=gpu-short            # Request QOS Type
-#SBATCH --nodelist=r8a100-c05  # Optional: specify nodes, comment out for auto allocation
+#SBATCH --qos=gpu-long            # Request QOS Type
+###SBATCH --constraint="L40"
+###SBATCH --nodelist=r8a100-a02
+#SBATCH --nodelist=r8a100-b05
+
 
 #==========================================================================#
 # Please add the SLURM parameter configuration above this horizontal line, #
@@ -29,6 +37,7 @@ export USER_GPUS_PER_NODE=8          # <--------------------- Modify it in time!
 export USER_NGPUS=$(($USER_GPUS_PER_NODE*$SLURM_JOB_NUM_NODES))
 nodelist_h_format=$(scontrol show hostnames $SLURM_JOB_NODELIST | \
     awk -v gpu=$USER_GPUS_PER_NODE '{printf ((NR>1?",":"")$0":%s"), gpu}')
+
 
 #- Check
 
@@ -58,15 +67,37 @@ master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 export MASTER_ADDR=$master_addr
 export MASTER_PORT=$(expr 50000 + $(echo -n $SLURM_JOBID | tail -c 4))
 
+### (TODO)
+### Warning:
+### Sometimes WORLD_SIZE is not the number of tasks, it may be the number of GPUs,
+### or even other values which need to be decided according to the actual situation
+###
+### export WORLD_SIZE=${USER_NGPUS}
+### or
+### export WORLD_SIZE=${task_size}
+###
 export WORLD_SIZE=${USER_NGPUS}
 
 #- NCCL Setting
+
+###
+### IB here refers to RDMA, not the InfiniBand network in the narrow sense,
+### it consists of RDMA over IB network, or RDMA over Converged Ethernet
+### 
+### RDMA's advantages: Zero-Copy and Kernel Bypass, make it faster than TCP stack
+### Since the cluster is basically configured with IB NICs, the best performance is obtained when using RDMA
+###
+### The NCCL_DEBUG variable controls the debug information that is displayed from NCCL
+### INFO - Prints debug information
+### export NCCL_DEBUG="INFO"
+###
 
 export NCCL_IB_DISABLE=0                          # 0: Using RDMA,        1: Using TCP/IP
 export NCCL_P2P_DISABLE=0                         # 0: Using P2P,         1: Not P2P, using cpu forwarding (high latency)
 export NCCL_IB_CUDA_SUPPORT=1
 export NCCL_NET_GDR_LEVEL=2
 export NCCL_IB_HCA="mlx5_0,mlx5_1,mlx5_2,mlx5_3"
+
 
 #- Log information
 echo "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX "
@@ -97,74 +128,17 @@ echo "$(df -h | grep -v tmpfs)"
 cluster-quota                     # nas quota
 
 #- Job step
-# Run the training script on all nodes
+# 提交方式:
+#   sbatch --export=ALL,DATA_TYPE=cid002 filter.slurm
+#   sbatch --export=ALL,DATA_TYPE=cid003 filter.slurm
+export DATA_TYPE=cid003
+
+export MODEL_PATH=/nfs_global/S/shiwenxuan/LLaMA-Factory/saves/qwen3-8b/full/87k_sft_8.1k_ds32_10epochs
+export DATA_TYPE="${DATA_TYPE:?Set DATA_TYPE via --export=ALL,DATA_TYPE=cid002|cid003}"
 echo "slurm procid is" $SLURM_PROCID
+echo "DATA_TYPE is" $DATA_TYPE
 echo "=============== srun begins =================="
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-TARGET_SCRIPT="/workspace/S/shiwenxuan/slime/examples/iverilog-r1/run_qwen3_8b_multinode_megatron.sh"
-
-# Export SLURM environment variables for the training script
-export SLURM_GPUS_ON_NODE=${USER_GPUS_PER_NODE}
-
-# # 1. Get Node List and Head Info
-# nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
-# nodes_array=($nodes)
-# head_node=${nodes_array[0]}
-
-# echo "Node List: $nodes"
-# echo "Head Node: $head_node"
-
-# # 2. Get Head Node IP Explicitly (crucial for connection)
-# # We run this command ON the head node to get its actual InfiniBand/Ethernet IP
-# HEAD_IP=$(srun --nodes=1 --ntasks=1 -w "$head_node" hostname -I | awk '{print $1}')
-# export MASTER_ADDR=$HEAD_IP
-# echo "MASTER_ADDR set to IP: $MASTER_ADDR"
-
-# # 3. Start Head Node
-# echo ">>> Starting Head Node on $head_node (Rank 0)..."
-# export NODE_RANK=0
-# srun --nodes=1 --ntasks=1 -w "$head_node" bash "$TARGET_SCRIPT" &
-# HEAD_PID=$!
-
-# # 4. Wait for Ray to be Ready
-# echo ">>> Waiting for Ray Head to start on $head_node:$MASTER_PORT..."
-
-# # Define the ready flag path (must match the logic in the run script)
-# JOB_ID_SHORT=$(echo "${SLURM_JOB_ID}" | cut -c1-6)
-# READY_FILE="/workspace/S/shiwenxuan/tmp/job_${JOB_ID_SHORT}/ray_head_ready"
-
-# echo "Watching for flag file: $READY_FILE"
-
-# # Check for flag file
-# for i in {1..120}; do # Wait up to 10 minutes
-#     if [ -f "$READY_FILE" ]; then
-#         echo "✓ Ray Head is UP (Flag file found)!"
-#         break
-#     fi
-    
-#     if ! kill -0 $HEAD_PID 2>/dev/null; then
-#         echo "ERROR: Head node process died!"
-#         exit 1
-#     fi
-    
-#     # Echo to stderr to avoid buffering issues
-#     >&2 echo "Waiting for Ray Head... ($i/120)"
-#     sleep 5
-# done
-
-# # 5. Start Worker Nodes
-# echo ">>> Ray Head is ready. Starting Worker Nodes..."
-# for ((i=1; i<SLURM_JOB_NUM_NODES; i++)); do
-#     worker_node=${nodes_array[$i]}
-#     export NODE_RANK=$i
-#     echo "Starting Worker $i on $worker_node..."
-#     srun --nodes=1 --ntasks=1 -w "$worker_node" bash "$TARGET_SCRIPT" &
-# done
-
-# # 6. Wait for job completion
-# wait
-
-sleep 6h
+srun bash filter.sh
 
 #- End
 echo "Job end at $(date "+%Y-%m-%d %H:%M:%S")"

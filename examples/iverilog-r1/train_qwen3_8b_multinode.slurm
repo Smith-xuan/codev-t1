@@ -17,7 +17,7 @@
 #SBATCH --gres=gpu:8                 # Request 8 GPUs per node
 #SBATCH --gres-flags=enforce-binding # CPU-GPU Affinity
 #SBATCH --qos=gpu-normal            # Request QOS Type
-#SBATCH --nodelist=r8a100-d[02,05]  # Optional: specify nodes, comment out for auto allocation
+#SBATCH --nodelist=r8a100-d[00,05]  # Optional: specify nodes, comment out for auto allocation
 
 #==========================================================================#
 # Please add the SLURM parameter configuration above this horizontal line, #
